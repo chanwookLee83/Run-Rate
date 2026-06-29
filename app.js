@@ -46,11 +46,20 @@ function toast(msg, type=''){
   setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(()=>el.remove(), 300); }, 2600);
 }
 function setConnStatus(connected){
+  const prev = state.connected;
   state.connected = connected;
+  const status = document.getElementById('sync-status');
   const dot = document.getElementById('conn-dot');
   const label = document.getElementById('conn-label');
+  if(status){
+    status.classList.toggle('ok', connected);
+    status.classList.toggle('bad', !connected);
+  }
   if(dot) dot.style.background = connected ? 'var(--green)' : 'var(--red)';
-  if(label) label.textContent = connected ? 'Firestore 연결됨' : '연결 끊김 (오프라인 캐시 사용 중)';
+  if(label) label.textContent = connected ? '동기화 완료' : '연결 끊김 (오프라인 캐시 사용 중)';
+  if(connected && !prev){
+    toast('동기화 완료', 'success');
+  }
 }
 
 // ---------- Persistence (Firestore) ----------
@@ -125,7 +134,7 @@ function subscribeProjectDetail(pid){
     snap.docs.forEach(d=>{
       const c = d.data();
       if(!byProc[c.processId]) byProc[c.processId] = [];
-      byProc[c.processId].push({ id:d.id, ts: c.ts, ct: c.ct });
+      byProc[c.processId].push({ id:d.id, ts: Number(c.ts), ct: Number(c.ct) });
     });
     proj.cycles = byProc;
     if(state.timer.running){
@@ -195,13 +204,14 @@ function projectStatus(proj){
 
 // ---------- Cycle time / Rate calculations ----------
 function getCycles(proj, processId){
-  return (proj.cycles[processId] || []).slice().sort((a,b)=> a.ts - b.ts);
+  return (proj.cycles[processId] || []).slice().sort((a,b)=> Number(a.ts) - Number(b.ts));
 }
 function computeRate(proj, processId){
   const proc = proj.processes.find(p=>p.id===processId);
   const cycles = getCycles(proj, processId);
   if(!proc || cycles.length===0) return { avgCt:null, uph:null, ratePct:null, n:0, minCt:null, maxCt:null, stdCt:null };
-  const cts = cycles.map(c=>c.ct);
+  const cts = cycles.map(c=> Number(c.ct)).filter(v=>!isNaN(v) && v>0);
+  if(cts.length===0) return { avgCt:null, uph:null, ratePct:null, n:0, minCt:null, maxCt:null, stdCt:null };
   const avgCt = cts.reduce((a,b)=>a+b,0)/cts.length;
   const uph = avgCt > 0 ? 3600/avgCt : null;
   let ratePct = null;
@@ -219,6 +229,33 @@ function computeRate(proj, processId){
     maxCt: round(Math.max(...cts),2),
     stdCt: round(Math.sqrt(variance),3)
   };
+}
+
+function processManpower(proc){
+  const m = Number(proc?.manpower);
+  if(isNaN(m) || m <= 0) return 1;
+  return m;
+}
+
+function computeCapacity(proj, processId){
+  const proc = proj.processes.find(p=>p.id===processId);
+  const r = computeRate(proj, processId);
+  if(!proc) return { manpower:1, targetUph:null, actualUph:r.uph, targetCapa:null, actualCapa:null, capaGap:null };
+  const manpower = processManpower(proc);
+  const targetUph = (proc.targetCt && proc.targetCt>0) ? round(3600/proc.targetCt, 1) : null;
+  const actualUph = r.uph;
+  const targetCapa = targetUph!==null ? round(targetUph * manpower, 1) : null;
+  const actualCapa = actualUph!==null ? round(actualUph * manpower, 1) : null;
+  const capaGap = (targetCapa!==null && actualCapa!==null) ? round(actualCapa - targetCapa, 1) : null;
+  return { manpower, targetUph, actualUph, targetCapa, actualCapa, capaGap };
+}
+
+function capaInsight(ratePct){
+  if(ratePct===null) return { tone:'warn', title:'측정 데이터 부족', msg:'사이클타임 5건 이상을 먼저 측정하세요.' };
+  if(ratePct>=110) return { tone:'good', title:'목표 대비 여유 있음', msg:'현재 조건 유지 + 표준작업 고정으로 재현성을 확보하세요.' };
+  if(ratePct>=100) return { tone:'good', title:'목표 충족', msg:'병목 후보 공정과 교대별 편차를 점검해 안정화하세요.' };
+  if(ratePct>=90) return { tone:'warn', title:'경계 구간', msg:'작업 분해(동작/이동/대기) 후 5~10% 단축 CAPA를 수립하세요.' };
+  return { tone:'bad', title:'즉시 개선 필요', msg:'설비/치공구/동선 개선과 인력 재배치 CAPA를 즉시 실행하세요.' };
 }
 
 function projectOverallRate(proj){
@@ -245,10 +282,57 @@ function findBottleneck(proj){
 function defectSummary(proj, processId){
   const list = processId ? proj.defects.filter(d=>d.processId===processId) : proj.defects;
   const totalDefect = list.reduce((s,d)=>s+Number(d.qty||0),0);
-  const totalProduced = list.length ? Math.max(...list.map(d=>Number(d.total||0))) : 0;
+  const producedFromDefect = list.reduce((m,d)=>{
+    const v = Number(d.total);
+    return (isNaN(v) || v < 0) ? m : Math.max(m, v);
+  }, 0);
+  const totalProduced = producedFromDefect;
+  const goodQty = Math.max(totalProduced - totalDefect, 0);
   const ppm = totalProduced>0 ? round((totalDefect/totalProduced)*1000000,0) : null;
   const defectRate = totalProduced>0 ? round((totalDefect/totalProduced)*100,3) : null;
-  return { totalDefect, totalProduced, ppm, defectRate, count: list.length };
+  const yieldRate = totalProduced>0 ? round((goodQty/totalProduced)*100,3) : null;
+  const targetQty = (!processId && proj.targetQty) ? Number(proj.targetQty) : null;
+  const runProgressPct = (targetQty && targetQty>0) ? round((totalProduced/targetQty)*100,1) : null;
+  return {
+    totalDefect,
+    totalProduced,
+    goodQty,
+    ppm,
+    defectRate,
+    yieldRate,
+    targetQty,
+    runProgressPct,
+    count: list.length
+  };
+}
+
+function processDefectSummaryList(proj){
+  return proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>{
+    const list = proj.defects.filter(d=>d.processId===p.id);
+    const produced = list.reduce((m,d)=>{
+      const v = Number(d.total);
+      return (isNaN(v) || v < 0) ? m : Math.max(m, v);
+    }, 0);
+    const defect = list.reduce((s,d)=>s+Number(d.qty||0),0);
+    const good = Math.max(produced - defect, 0);
+    const defectRate = produced>0 ? round((defect/produced)*100,3) : null;
+    const yieldRate = produced>0 ? round((good/produced)*100,3) : null;
+    const r = computeRate(proj, p.id);
+    const targetQty = Number(proj.targetQty || 0);
+    const progressPct = targetQty>0 ? round((produced/targetQty)*100,1) : null;
+    return {
+      processId: p.id,
+      seq: p.seq,
+      name: p.name,
+      produced,
+      good,
+      defect,
+      defectRate,
+      yieldRate,
+      ratePct: r.ratePct,
+      progressPct
+    };
+  });
 }
 
 // ---------- CPK calculations ----------
@@ -458,16 +542,16 @@ function renderProcessTab(proj){
     </div>
     <div class="panel-body" style="padding:0;">
       ${proj.processes.length===0 ? `<div class="mini-empty"><div class="ico">📋</div><p>품번 ${escapeHtml(proj.pn)}의 조립 공정을 등록하세요.<br>예: 1차 압입 → 부품 체결 → 토크 검사 → 외관 검사</p></div>` : `
-      <div class="col-headers"><div></div><div>공정명 / 설비</div><div>목표 C/T</div><div>측정수</div><div>Avg C/T</div><div></div><div></div></div>
+      <div class="col-headers"><div></div><div>공정명 / 설비</div><div>목표 C/T</div><div>인원</div><div>측정수</div><div>Avg C/T</div><div></div></div>
       ${proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>{
         const r = computeRate(proj, p.id);
         return `<div class="process-row">
           <div class="proc-num">${p.seq}</div>
           <div class="proc-name">${escapeHtml(p.name)}${p.eq?`<span class="proc-eq">${escapeHtml(p.eq)}</span>`:''}</div>
           <div class="mono">${p.targetCt? p.targetCt+'초' : '미설정'}</div>
+          <div class="mono">${processManpower(p)}명</div>
           <div class="mono">${r.n}건</div>
           <div class="mono">${r.avgCt!==null? r.avgCt+'초' : '—'}</div>
-          <div></div>
           <div class="row-actions">
             <div class="icon-mini" data-del-process="${p.id}" title="삭제">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
@@ -480,16 +564,111 @@ function renderProcessTab(proj){
   </div>`;
 }
 
+function renderAnalysisOverallChart(rows){
+  const rated = rows.filter(r=>r.ratePct!==null);
+  const maxRate = rated.length ? Math.max(...rated.map(r=>r.ratePct), 100) : 100;
+  return `
+  <div style="display:flex; flex-direction:column; gap:10px;">
+    ${rows.map(r=>{
+      const w = r.ratePct===null ? 0 : Math.max(3, Math.min(100, (r.ratePct/maxRate)*100));
+      const tone = r.ratePct===null ? '#9CA3AF' : r.ratePct>=100 ? 'var(--green)' : r.ratePct>=90 ? 'var(--amber)' : 'var(--red)';
+      return `<div style="display:grid; grid-template-columns:170px 1fr 70px; gap:10px; align-items:center;">
+        <div style="font-size:12px; font-weight:600; color:var(--ink-soft);">${escapeHtml(r.label)}</div>
+        <div style="height:10px; background:#ECE9E0; border-radius:999px; overflow:hidden;">
+          <div style="width:${w}%; height:100%; background:${tone};"></div>
+        </div>
+        <div class="mono" style="font-size:12px; text-align:right; color:var(--ink);">${r.ratePct===null?'—':r.ratePct+'%'}</div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function renderAnalysisAllTab(proj){
+  const rows = proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>{
+    const r = computeRate(proj, p.id);
+    const bottleneck = findBottleneck(proj);
+    return {
+      id: p.id,
+      label: `${p.seq}. ${p.name}`,
+      targetCt: p.targetCt,
+      avgCt: r.avgCt,
+      uph: r.uph,
+      ratePct: r.ratePct,
+      n: r.n
+    };
+  });
+  const measured = rows.filter(r=>r.n>0).length;
+  const totalSamples = rows.reduce((s,r)=>s+r.n,0);
+  const avgRate = rows.filter(r=>r.ratePct!==null).length
+    ? round(rows.filter(r=>r.ratePct!==null).reduce((s,r)=>s+r.ratePct,0)/rows.filter(r=>r.ratePct!==null).length,1)
+    : null;
+  const bottleneck = findBottleneck(proj);
+
+  return `
+  <div class="kpi-strip" style="grid-template-columns:repeat(5,1fr);">
+    <div class="kpi-card"><div class="kpi-label">등록 공정 수</div><div class="kpi-value">${rows.length}<span class="kpi-unit">개</span></div></div>
+    <div class="kpi-card"><div class="kpi-label">측정 완료 공정</div><div class="kpi-value">${measured}<span class="kpi-unit">개</span></div></div>
+    <div class="kpi-card"><div class="kpi-label">총 측정 건수</div><div class="kpi-value">${totalSamples}<span class="kpi-unit">건</span></div></div>
+    <div class="kpi-card"><div class="kpi-label">공정 평균 Rate</div><div class="kpi-value">${avgRate??'—'}<span class="kpi-unit">%</span></div></div>
+    <div class="kpi-card"><div class="kpi-label">병목 공정</div><div class="kpi-value" style="font-size:18px;">${bottleneck?escapeHtml(bottleneck.name):'—'}</div></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h3>공정별 Rate% 비교 그래프</h3><span class="ph-tag">전체 보기</span></div>
+    <div class="panel-body">${rows.length===0?'<div class="mini-empty"><p>등록된 공정이 없습니다.</p></div>':renderAnalysisOverallChart(rows)}</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h3>공정별 분석 요약</h3><span class="ph-tag">${rows.length}개 공정</span></div>
+    <div class="panel-body" style="padding:0; overflow-x:auto;">
+      <table class="data-table">
+        <thead><tr><th>공정</th><th>목표 C/T(초)</th><th>Avg C/T(초)</th><th>UPH</th><th>Rate(%)</th><th>측정건수</th></tr></thead>
+        <tbody>
+        ${rows.map(r=>`<tr class="${bottleneck && bottleneck.id===r.id ? 'bottleneck-row' : ''}">
+          <td>${escapeHtml(r.label)}</td>
+          <td>${r.targetCt??'—'}</td>
+          <td>${r.avgCt??'—'}</td>
+          <td>${r.uph??'—'}</td>
+          <td>${r.ratePct??'—'}</td>
+          <td>${r.n}</td>
+        </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel"><div class="panel-body"><p style="font-size:12px; color:var(--gauge-grey);">사이클타임 입력/랩 측정은 공정 칩에서 개별 공정을 선택하면 사용할 수 있습니다.</p></div></div>`;
+}
+
 // ---------- ANALYSIS TAB ----------
 function renderAnalysisTab(proj){
   if(proj.processes.length===0){
     return `<div class="panel"><div class="panel-body"><div class="mini-empty"><div class="ico">📊</div><p>먼저 "공정 등록" 탭에서 공정을 추가하세요.</p></div></div></div>`;
   }
-  if(!state.activeProcessId || !proj.processes.find(p=>p.id===state.activeProcessId)){
+  if(!state.activeProcessId || (state.activeProcessId!=='__all__' && !proj.processes.find(p=>p.id===state.activeProcessId))){
     state.activeProcessId = proj.processes.slice().sort((a,b)=>a.seq-b.seq)[0].id;
   }
+
+  if(state.activeProcessId === '__all__'){
+    return `
+    <div class="analysis-toolbar">
+      <div class="proc-selector">
+        <div class="proc-chip active" data-select-process="__all__">전체</div>
+        ${proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>`<div class="proc-chip" data-select-process="${p.id}">${p.seq}. ${escapeHtml(p.name)}</div>`).join('')}
+      </div>
+      <button class="btn btn-sm" id="btn-export-cycles">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        CSV 다운로드
+      </button>
+    </div>
+    ${renderAnalysisAllTab(proj)}`;
+  }
+
   const proc = proj.processes.find(p=>p.id===state.activeProcessId);
   const r = computeRate(proj, proc.id);
+  const cap = computeCapacity(proj, proc.id);
+  const insight = capaInsight(r.ratePct);
+  const ctGapSec = (proc.targetCt && r.avgCt!==null) ? round(proc.targetCt - r.avgCt, 2) : null;
   const cycles = getCycles(proj, proc.id).slice().reverse();
 
   const rateClass = r.ratePct===null?'':r.ratePct>=100?'good':r.ratePct>=90?'warn':'bad';
@@ -497,6 +676,7 @@ function renderAnalysisTab(proj){
   return `
   <div class="analysis-toolbar">
     <div class="proc-selector">
+      <div class="proc-chip" data-select-process="__all__">전체</div>
       ${proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>`<div class="proc-chip ${p.id===proc.id?'active':''}" data-select-process="${p.id}">${p.seq}. ${escapeHtml(p.name)}</div>`).join('')}
     </div>
     <button class="btn btn-sm" id="btn-export-cycles">
@@ -505,7 +685,7 @@ function renderAnalysisTab(proj){
     </button>
   </div>
 
-  <div class="kpi-strip" id="analysis-kpi-strip" style="grid-template-columns:repeat(4,1fr);">
+  <div class="kpi-strip" id="analysis-kpi-strip" style="grid-template-columns:repeat(6,1fr);">
     <div class="kpi-card">
       <div class="kpi-label">평균 사이클타임</div>
       <div class="kpi-value">${r.avgCt!==null?r.avgCt:'—'}<span class="kpi-unit">초</span></div>
@@ -519,7 +699,17 @@ function renderAnalysisTab(proj){
     <div class="kpi-card ${rateClass!==''?'status-'+rateClass:''}">
       <div class="kpi-label">Rate %</div>
       <div class="kpi-value ${rateClass}">${r.ratePct!==null?r.ratePct:'—'}<span class="kpi-unit">%</span></div>
-      <div class="kpi-sub">목표C/T ÷ 실측Avg C/T</div>
+      <div class="kpi-sub">목표 대비 ${ctGapSec===null?'—':(ctGapSec>=0?'+':'')+ctGapSec+'초'}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">투입 인원</div>
+      <div class="kpi-value">${cap.manpower}<span class="kpi-unit">명</span></div>
+      <div class="kpi-sub">0.5 단위 입력 지원</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">CAPA (인력 반영)</div>
+      <div class="kpi-value">${cap.actualCapa!==null?cap.actualCapa:'—'}<span class="kpi-unit">EA/h</span></div>
+      <div class="kpi-sub">목표 ${cap.targetCapa??'—'} / GAP ${cap.capaGap??'—'}</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">측정 횟수</div>
@@ -529,12 +719,32 @@ function renderAnalysisTab(proj){
   </div>
 
   <div class="panel">
+    <div class="panel-head"><h3>CAPA 분석</h3></div>
+    <div class="panel-body">
+      <div class="kpi-strip" style="grid-template-columns:repeat(3,1fr); margin-bottom:12px;">
+        <div class="kpi-card"><div class="kpi-label">목표 UPH</div><div class="kpi-value">${cap.targetUph??'—'}</div></div>
+        <div class="kpi-card"><div class="kpi-label">실측 UPH</div><div class="kpi-value">${cap.actualUph??'—'}</div></div>
+        <div class="kpi-card"><div class="kpi-label">CT 차이(목표-실측)</div><div class="kpi-value ${ctGapSec===null?'':ctGapSec>=0?'good':'bad'}">${ctGapSec??'—'}<span class="kpi-unit">초</span></div></div>
+      </div>
+      <div class="history-row" style="border:1px solid var(--line); border-radius:8px; margin-top:2px;">
+        <div>
+          <div class="h-main"><span class="status-dot ${insight.tone}"></span>${insight.title}</div>
+          <div class="h-sub">${insight.msg}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
     <div class="panel-head"><h3>사이클타임 측정 입력</h3></div>
     <div class="panel-body">
       <div class="cycle-input-panel">
         <div class="timer-display" id="timer-display">00.0</div>
         <button class="btn btn-primary" id="btn-timer-toggle">측정 시작</button>
-        <button class="btn" id="btn-timer-lap" disabled>랩 기록 (Enter)</button>
+        <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-start;">
+          <div id="lap-no-label" class="mono" style="font-size:11px; color:var(--gauge-grey);">LAP #${cycles.length+1}</div>
+          <button class="btn" id="btn-timer-lap" disabled>랩 기록 (Enter)</button>
+        </div>
         <div class="field" style="max-width:160px;">
           <label>또는 직접 입력 (초)</label>
           <input type="number" step="0.01" id="manual-ct-input" class="mono" placeholder="예: 28.5">
@@ -689,10 +899,11 @@ function renderCpkRawInput(cd){
   const raw = cd.raw || [];
   return `
   <div class="field" style="margin-bottom:12px;">
-    <label>측정값 일괄 입력 (쉼표 또는 줄바꿈으로 구분)</label>
-    <textarea id="cpk-raw-bulk" rows="2" class="mono" placeholder="예: 10.02, 9.98, 10.05, 9.99, 10.01"></textarea>
+    <label>측정값 입력 (1개씩 기록)</label>
+    <input type="number" step="any" id="cpk-raw-single" class="mono" placeholder="예: 10.02">
+    <div class="hint">값 입력 후 Enter 키 또는 "기록" 버튼을 누르세요.</div>
   </div>
-  <button class="btn btn-sm" id="btn-add-bulk-raw">일괄 추가</button>
+  <button class="btn btn-sm" id="btn-add-raw-one">기록</button>
   <div style="margin-top:14px;">
     <table class="data-table">
       <thead><tr><th>#</th><th>측정값</th><th></th></tr></thead>
@@ -729,23 +940,70 @@ function renderCpkStatsInput(cd){
 
 // ---------- HISTORY TAB ----------
 function renderHistoryTab(proj){
-  const defects = proj.defects.slice().sort((a,b)=> b.ts - a.ts);
+  const defects = proj.defects.filter(d=>Number(d.qty||0) > 0).slice().sort((a,b)=> b.ts - a.ts);
   const ds = defectSummary(proj, null);
+  const procRows = processDefectSummaryList(proj);
+  const overallRate = projectOverallRate(proj);
+  const rrClass = overallRate===null? '' : overallRate>=100?'good':overallRate>=90?'warn':'bad';
   return `
-  <div class="kpi-strip" style="grid-template-columns:repeat(3,1fr); margin-bottom:18px;">
+  <div class="kpi-strip" style="grid-template-columns:repeat(6,1fr); margin-bottom:18px;">
     <div class="kpi-card">
-      <div class="kpi-label">총 불량 건수</div>
-      <div class="kpi-value">${ds.totalDefect}<span class="kpi-unit">건</span></div>
+      <div class="kpi-label">전체 RunRate%</div>
+      <div class="kpi-value ${rrClass}">${overallRate??'—'}<span class="kpi-unit">%</span></div>
+      <div class="kpi-sub">병목 공정 기준</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">불량률</div>
-      <div class="kpi-value">${ds.defectRate??'—'}<span class="kpi-unit">%</span></div>
+      <div class="kpi-label">목표 수량</div>
+      <div class="kpi-value">${ds.targetQty??'—'}<span class="kpi-unit">EA</span></div>
+      <div class="kpi-sub">프로젝트 목표</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">누적 생산수량</div>
+      <div class="kpi-value">${ds.totalProduced}<span class="kpi-unit">EA</span></div>
+      <div class="kpi-sub">진척 ${ds.runProgressPct??'—'}%</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">양품 수량</div>
+      <div class="kpi-value good">${ds.goodQty}<span class="kpi-unit">EA</span></div>
+      <div class="kpi-sub">수율 ${ds.yieldRate??'—'}%</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">불량 수량</div>
+      <div class="kpi-value bad">${ds.totalDefect}<span class="kpi-unit">EA</span></div>
+      <div class="kpi-sub">불량률 ${ds.defectRate??'—'}%</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">PPM</div>
       <div class="kpi-value">${ds.ppm??'—'}</div>
+      <div class="kpi-sub">백만개당 불량</div>
     </div>
   </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h3>공정별 품질 상세</h3>
+      <span class="ph-tag">${procRows.length}개 공정</span>
+    </div>
+    <div class="panel-body" style="padding:0;">
+      ${procRows.length===0 ? `<div class="mini-empty"><p>등록된 공정이 없습니다.</p></div>` : `
+      <table class="data-table">
+        <thead><tr><th>공정</th><th>생산수량(EA)</th><th>양품수량(EA)</th><th>불량수량(EA)</th><th>불량률(%)</th><th>수율(%)</th><th>Rate%(RunRate)</th><th>목표대비 진척률(%)</th></tr></thead>
+        <tbody>
+        ${procRows.map(r=>`<tr>
+          <td>${r.seq}. ${escapeHtml(r.name)}</td>
+          <td>${r.produced}</td>
+          <td>${r.good}</td>
+          <td>${r.defect}</td>
+          <td>${r.defectRate??'—'}</td>
+          <td>${r.yieldRate??'—'}</td>
+          <td>${r.ratePct??'—'}</td>
+          <td>${r.progressPct===null ? '—' : `<span class="rate-pill ${r.progressPct>=100 ? 'chip-green' : r.progressPct>=80 ? 'chip-amber' : 'chip-red'}">${r.progressPct}%</span>`}</td>
+        </tr>`).join('')}
+        </tbody>
+      </table>`}
+    </div>
+  </div>
+
   <div class="panel">
     <div class="panel-head">
       <h3>불량 이력</h3>
@@ -754,11 +1012,11 @@ function renderHistoryTab(proj){
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           CSV
         </button>
-        <button class="btn btn-primary btn-sm" id="btn-open-defect-modal">+ 불량 기록</button>
+        <button class="btn btn-primary btn-sm" id="btn-open-defect-modal">+ 결과 기록</button>
       </div>
     </div>
     <div class="panel-body" style="padding:0;">
-      ${defects.length===0? `<div class="mini-empty"><div class="ico">✓</div><p>기록된 불량이 없습니다.</p></div>` : defects.map(d=>{
+      ${defects.length===0? `<div class="mini-empty"><div class="ico">✓</div><p>표시할 불량 기록이 없습니다.</p></div>` : defects.map(d=>{
         const proc = proj.processes.find(p=>p.id===d.processId);
         return `<div class="history-row">
           <div>
@@ -766,6 +1024,9 @@ function renderHistoryTab(proj){
             <div class="h-sub">${proc?escapeHtml(proc.name):'공정 미지정'} · ${fmtDate(d.ts)}${d.total?' · 총생산 '+d.total:''}${d.remark?' · '+escapeHtml(d.remark):''}</div>
           </div>
           <div class="h-actions">
+            <div class="icon-mini" data-edit-defect="${d.id}" title="수정">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5z"/></svg>
+            </div>
             <div class="icon-mini" data-del-defect="${d.id}" title="삭제">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
             </div>
@@ -795,46 +1056,150 @@ function downloadCSV(filename, rows){
   toast('CSV 파일이 다운로드되었습니다', 'success');
 }
 
+function csvReportHeader(title, proj, processName=''){
+  const rows = [];
+  rows.push([title]);
+  rows.push(['생성시각', fmtDate(Date.now())]);
+  rows.push(['품번', proj.pn, '품명', proj.pname]);
+  if(processName) rows.push(['공정', processName]);
+  rows.push([]);
+  return rows;
+}
+
+function csvSection(rows, title){
+  rows.push([`[${title}]`]);
+}
+
 function exportCyclesCSV(proj, proc){
   const cycles = getCycles(proj, proc.id);
-  const rows = [['품번', proj.pn, '품명', proj.pname, '공정', proc.name, '목표C/T(초)', proc.targetCt??'']];
+  const rows = csvReportHeader('RUN&RATE 사이클타임 분석 리포트', proj, proc.name);
+  csvSection(rows, '요약');
+  rows.push(['목표 C/T(초)', proc.targetCt??'—']);
+  const r = computeRate(proj, proc.id);
+  rows.push(['평균 C/T(초)', r.avgCt??'—', 'UPH(EA/h)', r.uph??'—', 'Rate(%)', r.ratePct??'—']);
+  rows.push(['최소 C/T(초)', r.minCt??'—', '최대 C/T(초)', r.maxCt??'—', '표준편차', r.stdCt??'—']);
+  rows.push(['측정건수', r.n]);
   rows.push([]);
+  csvSection(rows, '측정 상세');
   rows.push(['No','측정시각','사이클타임(초)']);
   cycles.forEach((c,i)=> rows.push([i+1, fmtDate(c.ts), c.ct]));
   rows.push([]);
-  const r = computeRate(proj, proc.id);
-  rows.push(['평균C/T', r.avgCt, 'UPH', r.uph, 'Rate%', r.ratePct, 'Min', r.minCt, 'Max', r.maxCt, 'StdDev', r.stdCt]);
+  rows.push(['비고', 'Rate(%) = 목표 C/T ÷ 실측 평균 C/T × 100']);
   downloadCSV(`RunRate_${proj.pn}_${proc.name}_사이클타임_${fmtDateShort(nowISO())}.csv`, rows);
+}
+
+function exportAllCyclesCSV(proj){
+  const rows = csvReportHeader('RUN&RATE 전체 공정 사이클타임 리포트', proj);
+  csvSection(rows, '공정별 측정 상세');
+  rows.push(['공정','No','측정시각','사이클타임(초)']);
+  proj.processes.slice().sort((a,b)=>a.seq-b.seq).forEach(p=>{
+    const cycles = getCycles(proj, p.id);
+    if(cycles.length===0){
+      rows.push([`${p.seq}. ${p.name}`,'—','—','—']);
+      return;
+    }
+    cycles.forEach((c,i)=> rows.push([`${p.seq}. ${p.name}`, i+1, fmtDate(c.ts), c.ct]));
+  });
+  rows.push([]);
+  csvSection(rows, '공정별 요약');
+  rows.push(['공정','목표 C/T(초)','평균 C/T(초)','UPH','Rate(%)','측정건수']);
+  proj.processes.slice().sort((a,b)=>a.seq-b.seq).forEach(p=>{
+    const r = computeRate(proj, p.id);
+    rows.push([`${p.seq}. ${p.name}`, p.targetCt??'—', r.avgCt??'—', r.uph??'—', r.ratePct??'—', r.n]);
+  });
+  downloadCSV(`RunRate_${proj.pn}_전체공정_사이클타임_${fmtDateShort(nowISO())}.csv`, rows);
 }
 
 function exportCpkCSV(proj, proc){
   const cd = proj.cpkData[proc.id] || {};
   const summary = computeCpkSummary(proj, proc.id);
-  const rows = [['품번', proj.pn, '품명', proj.pname, '공정', proc.name, '측정항목', cd.itemName||'', '단위', cd.unit||'']];
-  rows.push(['USL', cd.usl??'', 'LSL', cd.lsl??'', 'Target', cd.target??'']);
-  rows.push(['입력방식', cd.mode==='raw'?'개별측정값':'통계값직접입력']);
+  const rows = csvReportHeader('RUN&RATE CPK 품질 리포트', proj, proc.name);
+  csvSection(rows, '규격 및 요약');
+  rows.push(['측정항목', cd.itemName||'—', '단위', cd.unit||'—']);
+  rows.push(['USL', cd.usl??'—', 'LSL', cd.lsl??'—', 'Target', cd.target??'—']);
+  rows.push(['입력방식', cd.mode==='raw'?'개별측정값':'통계값 직접입력']);
+  rows.push(['평균', summary.m??'—', '표준편차', summary.sd??'—', '표본수', summary.n]);
+  rows.push(['CP', summary.cp??'—', 'CPK', summary.cpk??'—', '판정', cpkGrade(summary.cpk).label]);
   rows.push([]);
   if(cd.mode==='raw'){
+    csvSection(rows, '개별 측정값');
     rows.push(['No','측정값']);
     (cd.raw||[]).forEach((v,i)=> rows.push([i+1, v]));
     rows.push([]);
   }
-  rows.push(['평균', summary.m??'', '표준편차', summary.sd??'', '표본수', summary.n, 'CP', summary.cp??'', 'CPK', summary.cpk??'', '판정', cpkGrade(summary.cpk).label]);
+  rows.push(['비고', '권장 표본수: 25개 이상']);
   downloadCSV(`RunRate_${proj.pn}_${proc.name}_CPK_${fmtDateShort(nowISO())}.csv`, rows);
 }
 
 function exportDefectsCSV(proj){
-  const rows = [['품번', proj.pn, '품명', proj.pname]];
+  const rows = csvReportHeader('RUN&RATE 불량 이력 리포트', proj);
+  const ds = defectSummary(proj,null);
+  csvSection(rows, '요약');
+  rows.push(['목표수량(EA)', proj.targetQty??'—', '누적생산수량(EA)', ds.totalProduced]);
+  rows.push(['양품수량(EA)', ds.goodQty, '불량수량(EA)', ds.totalDefect]);
+  rows.push(['불량률(%)', ds.defectRate??'—', '수율(%)', ds.yieldRate??'—', 'PPM', ds.ppm??'—']);
   rows.push([]);
+
+  const procRows = processDefectSummaryList(proj);
+  csvSection(rows, '공정별 품질 상세');
+  rows.push(['공정','생산수량(EA)','양품수량(EA)','불량수량(EA)','불량률(%)','수율(%)','RunRate(%)','목표대비 진척률(%)']);
+  procRows.forEach(r=> rows.push([
+    `${r.seq}. ${r.name}`,
+    r.produced,
+    r.good,
+    r.defect,
+    r.defectRate??'—',
+    r.yieldRate??'—',
+    r.ratePct??'—',
+    r.progressPct??'—'
+  ]));
+  rows.push([]);
+
+  csvSection(rows, '불량 이력 상세');
   rows.push(['No','기록시각','공정','불량유형','불량수량','총생산수량','비고']);
   proj.defects.slice().sort((a,b)=>a.ts-b.ts).forEach((d,i)=>{
     const proc = proj.processes.find(p=>p.id===d.processId);
     rows.push([i+1, fmtDate(d.ts), proc?proc.name:'', d.type, d.qty, d.total??'', d.remark??'']);
   });
   rows.push([]);
-  const ds = defectSummary(proj,null);
-  rows.push(['총불량건수', ds.totalDefect, '불량률(%)', ds.defectRate??'', 'PPM', ds.ppm??'']);
+  rows.push(['비고', '공정별 품질 상세는 불량 기록의 총생산수량(total) 기준으로 계산됩니다.']);
   downloadCSV(`RunRate_${proj.pn}_불량이력_${fmtDateShort(nowISO())}.csv`, rows);
+}
+
+function exportOnePageSummaryCSV(proj){
+  const rows = csvReportHeader('RUN&RATE 한장 요약 리포트', proj);
+  const ds = defectSummary(proj, null);
+  const overallRate = projectOverallRate(proj);
+  const bottleneck = findBottleneck(proj);
+  let cpkWorst = null;
+  proj.processes.forEach(p=>{
+    const c = computeCpkSummary(proj, p.id);
+    if(c.cpk!==null && (cpkWorst===null || c.cpk < cpkWorst)) cpkWorst = c.cpk;
+  });
+
+  csvSection(rows, '요약 KPI');
+  rows.push(['전체 RunRate(%)', overallRate??'—']);
+  rows.push(['병목 공정', bottleneck?bottleneck.name:'—']);
+  rows.push(['목표 수량(EA)', proj.targetQty??'—', '누적 생산(EA)', ds.totalProduced]);
+  rows.push(['양품(EA)', ds.goodQty, '불량(EA)', ds.totalDefect]);
+  rows.push(['불량률(%)', ds.defectRate??'—', '수율(%)', ds.yieldRate??'—']);
+  rows.push(['PPM', ds.ppm??'—', '최저 CPK', cpkWorst??'—']);
+  rows.push([]);
+
+  const procRows = processDefectSummaryList(proj).slice(0, 5);
+  csvSection(rows, '공정별 핵심 TOP5');
+  rows.push(['공정','RunRate(%)','진척률(%)','생산(EA)','불량(EA)']);
+  procRows.forEach(r=> rows.push([
+    `${r.seq}. ${r.name}`,
+    r.ratePct??'—',
+    r.progressPct??'—',
+    r.produced,
+    r.defect
+  ]));
+
+  rows.push([]);
+  rows.push(['비고', '상세 원본 데이터는 각 탭의 CSV 내보내기를 사용하세요.']);
+  downloadCSV(`RunRate_${proj.pn}_한장요약_${fmtDateShort(nowISO())}.csv`, rows);
 }
 
 async function exportFullBackupJSON(){
@@ -886,6 +1251,33 @@ async function exportFullBackupJSON(){
 function openModal(id){ document.getElementById(id).style.display='flex'; }
 function closeModal(id){ document.getElementById(id).style.display='none'; }
 
+let editingDefectId = null;
+function openDefectModal(proj, defect){
+  const sel = document.getElementById('defect-proc');
+  sel.innerHTML = proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+  const title = document.getElementById('modal-defect-title');
+  const saveBtn = document.getElementById('btn-save-defect');
+  if(defect){
+    editingDefectId = defect.id;
+    if(title) title.textContent = '결과 기록 수정';
+    if(saveBtn) saveBtn.textContent = '수정 저장';
+    sel.value = defect.processId || '';
+    document.getElementById('defect-type').value = defect.type || '';
+    document.getElementById('defect-qty').value = defect.qty || 1;
+    document.getElementById('defect-total').value = defect.total ?? '';
+    document.getElementById('defect-remark').value = defect.remark || '';
+  } else {
+    editingDefectId = null;
+    if(title) title.textContent = '결과 기록 추가';
+    if(saveBtn) saveBtn.textContent = '결과 저장';
+    document.getElementById('defect-type').value='';
+    document.getElementById('defect-qty').value=1;
+    document.getElementById('defect-total').value='';
+    document.getElementById('defect-remark').value='';
+  }
+  openModal('modal-defect');
+}
+
 document.querySelectorAll('[data-close]').forEach(btn=>{
   btn.addEventListener('click', ()=> closeModal(btn.dataset.close));
 });
@@ -897,7 +1289,8 @@ document.querySelectorAll('.modal-overlay').forEach(ov=>{
 let editingProjectId = null;
 document.getElementById('btn-new-project').addEventListener('click', ()=>openProjectModal());
 document.getElementById('btn-empty-new-project').addEventListener('click', ()=>openProjectModal());
-document.getElementById('btn-edit-project').addEventListener('click', ()=>openProjectModal(activeProject()));
+const btnEditProject = document.getElementById('btn-edit-project');
+if(btnEditProject) btnEditProject.addEventListener('click', ()=>openProjectModal(activeProject()));
 
 function openProjectModal(proj){
   editingProjectId = proj? proj.id : null;
@@ -946,7 +1339,8 @@ document.getElementById('btn-save-project').addEventListener('click', async ()=>
   }
 });
 
-document.getElementById('btn-delete-project').addEventListener('click', async ()=>{
+const btnDeleteProject = document.getElementById('btn-delete-project');
+if(btnDeleteProject) btnDeleteProject.addEventListener('click', async ()=>{
   const proj = activeProject();
   if(!proj) return;
   if(!confirm(`품번 "${proj.pn}" 프로젝트를 삭제하시겠습니까?\n모든 공정/측정 데이터가 함께 삭제됩니다.`)) return;
@@ -1004,6 +1398,7 @@ function addProcRow(data){
     <input type="text" placeholder="공정명 (예: 1차 압입)" class="proc-name-inp" value="${data?escapeHtml(data.name):''}">
     <input type="text" placeholder="설비명 (선택)" class="proc-eq-inp" style="max-width:130px;" value="${data?escapeHtml(data.eq||''):''}">
     <input type="number" step="any" placeholder="목표C/T(초)" class="proc-ct-inp mono" style="max-width:110px;" value="${data&&data.targetCt?data.targetCt:''}">
+    <input type="number" step="0.5" min="0.5" placeholder="인원(명)" class="proc-manpower-inp mono" style="max-width:90px;" value="${data&&data.manpower?data.manpower:1}">
     <div class="icon-mini btn-remove-row" title="삭제">&times;</div>
   `;
   row.querySelector('.btn-remove-row').addEventListener('click', ()=>{ row.remove(); renumberProcRows(); });
@@ -1036,7 +1431,8 @@ document.getElementById('btn-save-process').addEventListener('click', async ()=>
     names.push({
       name,
       eq: r.querySelector('.proc-eq-inp').value.trim(),
-      targetCt: r.querySelector('.proc-ct-inp').value ? Number(r.querySelector('.proc-ct-inp').value) : null
+      targetCt: r.querySelector('.proc-ct-inp').value ? Number(r.querySelector('.proc-ct-inp').value) : null,
+      manpower: r.querySelector('.proc-manpower-inp').value ? Number(r.querySelector('.proc-manpower-inp').value) : 1
     });
   });
   if(names.length===0){ toast('최소 1개 이상의 공정을 입력하세요', 'error'); return; }
@@ -1055,10 +1451,10 @@ document.getElementById('btn-save-process').addEventListener('click', async ()=>
       const match = existing.find(e=> e.name===n.name && !usedIds.has(e.id));
       if(match){
         usedIds.add(match.id);
-        batch.update(fb.doc(processesCol(proj.id), match.id), { seq:i+1, name:n.name, eq:n.eq, targetCt:n.targetCt });
+        batch.update(fb.doc(processesCol(proj.id), match.id), { seq:i+1, name:n.name, eq:n.eq, targetCt:n.targetCt, manpower:n.manpower });
       } else {
         const newRef = fb.doc(processesCol(proj.id)); // 자동 ID 생성
-        batch.set(newRef, { seq:i+1, name:n.name, eq:n.eq, targetCt:n.targetCt });
+        batch.set(newRef, { seq:i+1, name:n.name, eq:n.eq, targetCt:n.targetCt, manpower:n.manpower });
       }
     });
     // 목록에서 완전히 빠진 기존 공정 문서는 삭제 (측정 데이터는 processId로 남아있으나 공정삭제와 동일플로우 사용)
@@ -1135,8 +1531,12 @@ function attachContentEvents(proj){
   });
   const expCyclesBtn = document.getElementById('btn-export-cycles');
   if(expCyclesBtn) expCyclesBtn.addEventListener('click', ()=>{
+    if(state.activeProcessId === '__all__'){
+      exportAllCyclesCSV(proj);
+      return;
+    }
     const proc = proj.processes.find(p=>p.id===state.activeProcessId);
-    exportCyclesCSV(proj, proc);
+    if(proc) exportCyclesCSV(proj, proc);
   });
 
   // cpk tab
@@ -1170,20 +1570,31 @@ function attachContentEvents(proj){
       toast('규격이 저장되었습니다', 'success');
     }catch(e){ toast('저장 실패: '+e.message, 'error'); }
   });
-  const addBulkBtn = document.getElementById('btn-add-bulk-raw');
-  if(addBulkBtn) addBulkBtn.addEventListener('click', async ()=>{
-    const txt = document.getElementById('cpk-raw-bulk').value;
-    const vals = txt.split(/[,\n\s]+/).map(s=>s.trim()).filter(Boolean).map(Number).filter(v=>!isNaN(v));
-    if(vals.length===0){ toast('유효한 측정값이 없습니다', 'error'); return; }
+  const addOneBtn = document.getElementById('btn-add-raw-one');
+  if(addOneBtn) addOneBtn.addEventListener('click', async ()=>{
+    const input = document.getElementById('cpk-raw-single');
+    const val = Number(input.value);
+    if(!input.value || isNaN(val)){ toast('유효한 측정값을 입력하세요', 'error'); return; }
     try{
       // arrayUnion으로 원자적 추가 — 기존 배열을 읽어서 통째로 다시쓰지 않으므로 덮어쓰기 위험 없음
       await fb.setDoc(fb.doc(cpkCol(proj.id), state.cpkProcessId), {
-        raw: fb.arrayUnion(...vals),
+        raw: fb.arrayUnion(val),
         mode: state.cpkInputMode
       }, { merge: true });
-      document.getElementById('cpk-raw-bulk').value = '';
-      toast(`${vals.length}개 측정값이 추가되었습니다`, 'success');
+      input.value = '';
+      input.focus();
+      toast('측정값 1건이 기록되었습니다', 'success');
     }catch(e){ toast('추가 실패: '+e.message, 'error'); }
+  });
+  const rawSingleInput = document.getElementById('cpk-raw-single');
+  if(rawSingleInput) rawSingleInput.addEventListener('keydown', (e)=>{
+    if(e.key==='Enter'){
+      e.preventDefault();
+      const btn = document.getElementById('btn-add-raw-one');
+      if(btn) btn.click();
+      // 포커스 유지: Enter 후 다시 입력 필드에 포커스
+      setTimeout(()=>{ rawSingleInput.focus(); }, 0);
+    }
   });
   document.querySelectorAll('[data-del-raw]').forEach(el=>{
     el.addEventListener('click', async ()=>{
@@ -1217,14 +1628,12 @@ function attachContentEvents(proj){
 
   // history tab
   const openDefectBtn = document.getElementById('btn-open-defect-modal');
-  if(openDefectBtn) openDefectBtn.addEventListener('click', ()=>{
-    const sel = document.getElementById('defect-proc');
-    sel.innerHTML = proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
-    document.getElementById('defect-type').value='';
-    document.getElementById('defect-qty').value=1;
-    document.getElementById('defect-total').value='';
-    document.getElementById('defect-remark').value='';
-    openModal('modal-defect');
+  if(openDefectBtn) openDefectBtn.addEventListener('click', ()=> openDefectModal(proj, null));
+  document.querySelectorAll('[data-edit-defect]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const d = proj.defects.find(x=>x.id===el.dataset.editDefect);
+      if(d) openDefectModal(proj, d);
+    });
   });
   document.querySelectorAll('[data-del-defect]').forEach(el=>{
     el.addEventListener('click', async ()=>{
@@ -1245,6 +1654,8 @@ function refreshCycleTableOnly(proj){
   const proc = proj.processes.find(p=>p.id===state.activeProcessId);
   if(!proc) return;
   const r = computeRate(proj, proc.id);
+  const cap = computeCapacity(proj, proc.id);
+  const ctGapSec = (proc.targetCt && r.avgCt!==null) ? round(proc.targetCt - r.avgCt, 2) : null;
   const cycles = getCycles(proj, proc.id).slice().reverse();
   const rateClass = r.ratePct===null?'':r.ratePct>=100?'good':r.ratePct>=90?'warn':'bad';
 
@@ -1264,7 +1675,17 @@ function refreshCycleTableOnly(proj){
     <div class="kpi-card ${rateClass!==''?'status-'+rateClass:''}">
       <div class="kpi-label">Rate %</div>
       <div class="kpi-value ${rateClass}">${r.ratePct!==null?r.ratePct:'—'}<span class="kpi-unit">%</span></div>
-      <div class="kpi-sub">목표C/T ÷ 실측Avg C/T</div>
+      <div class="kpi-sub">목표 대비 ${ctGapSec===null?'—':(ctGapSec>=0?'+':'')+ctGapSec+'초'}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">투입 인원</div>
+      <div class="kpi-value">${cap.manpower}<span class="kpi-unit">명</span></div>
+      <div class="kpi-sub">0.5 단위 입력 지원</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">CAPA (인력 반영)</div>
+      <div class="kpi-value">${cap.actualCapa!==null?cap.actualCapa:'—'}<span class="kpi-unit">EA/h</span></div>
+      <div class="kpi-sub">목표 ${cap.targetCapa??'—'} / GAP ${cap.capaGap??'—'}</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">측정 횟수</div>
@@ -1295,6 +1716,9 @@ function refreshCycleTableOnly(proj){
       });
     }
   }
+
+  const lapNoLabel = document.getElementById('lap-no-label');
+  if(lapNoLabel) lapNoLabel.textContent = 'LAP #' + (cycles.length + 1);
 }
 
 async function addCycle(pid, processId, ct){
@@ -1333,10 +1757,18 @@ function toggleTimer(proj){
   }
 }
 function timerEnterHandler(e){
-  if(e.key==='Enter' && state.timer.running){
-    const proj = activeProject();
-    if(proj) recordLap(proj);
-  }
+  if(e.key!=='Enter' || !state.timer.running) return;
+
+  // 입력 필드에서 Enter는 해당 필드 동작(예: 수동 입력 추가)에 맡긴다.
+  const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+  if(tag==='input' || tag==='textarea' || tag==='select' || (e.target && e.target.isContentEditable)) return;
+
+  // Enter 기본 동작(포커스된 버튼 클릭 등)으로 타이머가 정지되는 것을 방지
+  e.preventDefault();
+  e.stopPropagation();
+
+  const proj = activeProject();
+  if(proj) recordLap(proj);
 }
 function recordLap(proj){
   if(!state.timer.running) return;
@@ -1354,10 +1786,24 @@ document.getElementById('btn-save-defect').addEventListener('click', async ()=>{
   const qty = Number(document.getElementById('defect-qty').value);
   const total = document.getElementById('defect-total').value;
   const remark = document.getElementById('defect-remark').value.trim();
-  if(!processId || !qty || qty<=0){ toast('공정과 불량 수량을 확인하세요', 'error'); return; }
+  if(!processId || qty < 0){ toast('공정을 확인하세요', 'error'); return; }
+  const defectType = type || (qty === 0 ? '불량없음' : '미분류');
   try{
-    await fb.addDoc(defectsCol(proj.id), { ts: Date.now(), processId, type: type||'미분류', qty, total: total?Number(total):null, remark });
+    if(editingDefectId){
+      const prev = proj.defects.find(d=>d.id===editingDefectId);
+      await fb.updateDoc(fb.doc(defectsCol(proj.id), editingDefectId), {
+        ts: prev?.ts || Date.now(),
+        processId,
+        type: defectType,
+        qty,
+        total: total?Number(total):null,
+        remark
+      });
+    } else {
+      await fb.addDoc(defectsCol(proj.id), { ts: Date.now(), processId, type: defectType, qty, total: total?Number(total):null, remark });
+    }
     closeModal('modal-defect');
+    editingDefectId = null;
     toast('불량 기록이 저장되었습니다', 'success');
   }catch(e){
     toast('저장 실패: ' + e.message, 'error');
@@ -1371,6 +1817,18 @@ document.getElementById('btn-toggle-sidebar').addEventListener('click', ()=>{
 
 // ---- Backup export/import ----
 document.getElementById('btn-export-all').addEventListener('click', exportFullBackupJSON);
+document.getElementById('btn-sync-refresh').addEventListener('click', ()=>{
+  toast('동기화 새로고침 중...', '');
+  location.reload();
+});
+document.getElementById('btn-export-summary').addEventListener('click', ()=>{
+  const proj = activeProject();
+  if(!proj){
+    toast('먼저 프로젝트를 선택하세요', 'error');
+    return;
+  }
+  exportOnePageSummaryCSV(proj);
+});
 document.getElementById('btn-import-all').addEventListener('click', ()=>{
   const inp = document.createElement('input');
   inp.type='file'; inp.accept='application/json';
@@ -1415,7 +1873,7 @@ async function restoreFromBackup(data){
     });
     (proj.processes||[]).forEach(p=>{
       const ref = fb.doc(processesCol(newProjRef.id));
-      batch.set(ref, { seq:p.seq, name:p.name, eq:p.eq||'', targetCt:p.targetCt??null });
+      batch.set(ref, { seq:p.seq, name:p.name, eq:p.eq||'', targetCt:p.targetCt??null, manpower:p.manpower??1 });
       // 사이클/CPK는 공정 문서ID가 바뀌므로 별도 루프에서 매핑 필요 → 아래에서 처리
       p.__newId = ref.id;
     });
@@ -1497,9 +1955,18 @@ if(window.__firebase){
   window.addEventListener('firebase-ready', init, { once:true });
 }
 
-// register service worker for PWA (best-effort; ignored if unsupported/blocked)
+// register service worker for PWA (production only)
+// localhost 개발 중에는 캐시된 index.html 때문에 최신 수정이 안 보일 수 있어 SW를 해제한다.
 if('serviceWorker' in navigator){
-  window.addEventListener('load', ()=>{
+  window.addEventListener('load', async ()=>{
+    const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    if(isLocalhost){
+      try{
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
+      }catch(_e){}
+      return;
+    }
     navigator.serviceWorker.register('sw.js').catch(()=>{});
   });
 }
