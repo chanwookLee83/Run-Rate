@@ -457,6 +457,7 @@ function selectProject(id){
   state.activeTab = 'overview';
   document.getElementById('main-empty').style.display='none';
   document.getElementById('proj-view').style.display='flex';
+  document.getElementById('sidebar').classList.add('collapsed');
   subscribeProjectDetail(id);
   renderSidebar();
   renderProjectHeader();
@@ -958,7 +959,7 @@ function renderCpkRawInput(cd){
     <button class="btn btn-sm" id="btn-add-raw-one">기록</button>
     ${raw.length>0 ? `<button class="btn btn-sm" id="btn-clear-all-raw" style="color:var(--red); border-color:var(--red);">전체삭제</button>` : ''}
   </div>
-  <div style="margin-top:14px;">
+  <div style="margin-top:14px; max-height:360px; overflow-y:auto;">
     <table class="data-table">
       <thead><tr><th>#</th><th>측정값</th><th></th></tr></thead>
       <tbody id="cpk-raw-tbody">
