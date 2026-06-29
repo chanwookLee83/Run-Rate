@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>RUN & RATE — 양산 초기 검증</title>
+<title>Run&amp; Rate결과</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1A2B42">
 <style>
@@ -65,6 +65,17 @@ body{
   border-left:1px solid #3D4F68; padding-left:14px; margin-left:2px;
 }
 #topbar .spacer{flex:1;}
+#topbar .sync-status{
+  display:flex; align-items:center; gap:8px;
+  font-size:11.5px; color:#D6E2F0;
+  background:#24344C; border:1px solid #3D4F68;
+  border-radius:20px; padding:6px 10px;
+}
+#topbar .sync-status .dot{width:6px; height:6px; border-radius:50%; background:var(--amber);}
+#topbar .sync-status.ok{color:#DDF6E7;}
+#topbar .sync-status.ok .dot{background:var(--green);}
+#topbar .sync-status.bad{color:#F6D8CF;}
+#topbar .sync-status.bad .dot{background:var(--red);}
 #topbar .proj-pill{
   font-size:12px; background:#24344C; padding:6px 12px; border-radius:20px;
   display:flex; align-items:center; gap:8px; cursor:pointer; transition:background .15s;
@@ -151,11 +162,12 @@ body{
 }
 .ph-title-row h1{font-family:'Barlow Condensed'; font-weight:700; font-size:24px; color:var(--ink);}
 .ph-title-row .ph-part{font-size:12px; color:var(--gauge-grey); margin-top:3px;}
-.ph-actions{display:flex; gap:8px;}
+.ph-actions{display:flex; gap:8px; flex-wrap:wrap;}
+.ph-actions .btn{white-space:nowrap; flex:0 0 auto; min-width:max-content;}
 .btn{
   border:1px solid var(--line-strong); background:#fff; color:var(--ink);
   padding:8px 14px; border-radius:6px; font-size:12.5px; font-weight:600; cursor:pointer;
-  display:flex; align-items:center; gap:6px; transition:all .12s;
+  display:flex; align-items:center; gap:6px; transition:all .12s; white-space:nowrap;
 }
 .btn:hover{border-color:var(--ink); background:#F8F7F3;}
 .btn-primary{background:var(--ink); border-color:var(--ink); color:#fff;}
@@ -167,7 +179,7 @@ body{
 .tabs{display:flex; gap:2px; margin-top:4px;}
 .tab{
   padding:10px 16px; font-size:13px; font-weight:600; color:var(--gauge-grey);
-  border-bottom:3px solid transparent; cursor:pointer; transition:all .12s; display:flex; align-items:center; gap:6px;
+  border-bottom:3px solid transparent; cursor:pointer; transition:all .12s; display:flex; align-items:center; gap:6px; white-space:nowrap;
 }
 .tab:hover{color:var(--ink-soft);}
 .tab.active{color:var(--ink); border-bottom-color:var(--amber);}
@@ -314,6 +326,8 @@ table.data-table th{
 }
 table.data-table td{padding:9px 10px; border-bottom:1px solid var(--line); font-family:'JetBrains Mono'; color:var(--ink);}
 table.data-table tr:hover td{background:#FAF9F5;}
+table.data-table tr.bottleneck-row td{background:var(--red-soft);}
+table.data-table tr.bottleneck-row td:first-child{box-shadow:inset 3px 0 0 var(--red);}
 table.data-table td.spec-out{color:var(--red); font-weight:700;}
 table.data-table .del-cell{cursor:pointer; color:var(--gauge-grey); text-align:center; font-family:'Inter';}
 table.data-table .del-cell:hover{color:var(--red);}
@@ -384,6 +398,20 @@ table.data-table .del-cell:hover{color:var(--red);}
   .kpi-strip{grid-template-columns:repeat(2,1fr);}
   .cpk-layout{grid-template-columns:1fr;}
   #sidebar{position:fixed; z-index:90; box-shadow:var(--shadow-md);}
+  #topbar .sub{display:none;}
+  .ph-top{flex-direction:column; gap:12px; align-items:flex-start;}
+  .ph-actions{width:100%;}
+  .tabs{overflow-x:auto; -webkit-overflow-scrolling:touch;}
+  .tab{flex:0 0 auto;}
+  .panel-head{flex-wrap:wrap; gap:8px;}
+}
+
+@media (max-width: 640px){
+  #content{padding:14px 12px 28px;}
+  #proj-header{padding:12px 12px 0;}
+  .ph-title-row h1{font-size:20px;}
+  .btn{padding:7px 10px; font-size:12px;}
+  .kpi-strip{grid-template-columns:1fr;}
 }
 </style>
 </head>
@@ -395,8 +423,15 @@ table.data-table .del-cell:hover{color:var(--red);}
   </button>
   <div class="brand"><span class="tick"></span>RUN&amp;RATE<span class="sub">양산 초기 검증 · CPK 분석</span></div>
   <div class="spacer"></div>
+  <div class="sync-status" id="sync-status"><span class="dot" id="conn-dot"></span><span id="conn-label">동기화 대기중</span></div>
+  <button class="icon-btn" id="btn-sync-refresh" title="동기화 새로고침">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15A9 9 0 1 1 23 10"/></svg>
+  </button>
   <button class="icon-btn" id="btn-export-all" title="전체 백업 내보내기">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+  </button>
+  <button class="icon-btn" id="btn-export-summary" title="한장 요약 CSV 내보내기">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg>
   </button>
   <button class="icon-btn" id="btn-import-all" title="백업 불러오기">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -404,7 +439,7 @@ table.data-table .del-cell:hover{color:var(--red);}
 </div>
 
 <div id="app">
-  <aside id="sidebar">
+  <aside id="sidebar" class="collapsed">
     <div class="sb-header">
       <span>프로젝트 (품번)</span>
       <button class="btn-new-proj" id="btn-new-project">
@@ -458,7 +493,7 @@ table.data-table .del-cell:hover{color:var(--red);}
           <div class="tab" data-tab="process">공정 등록 <span class="badge" id="badge-proc-count">0</span></div>
           <div class="tab" data-tab="analysis">공정별 분석</div>
           <div class="tab" data-tab="cpk">CPK 품질측정</div>
-          <div class="tab" data-tab="history">불량/이력</div>
+          <div class="tab" data-tab="history">Run&amp; Rate결과</div>
         </div>
       </div>
       <div id="content"></div>
@@ -533,7 +568,7 @@ table.data-table .del-cell:hover{color:var(--red);}
 <div class="modal-overlay" id="modal-defect" style="display:none;">
   <div class="modal">
     <div class="modal-head">
-      <h2>불량 기록 추가</h2>
+      <h2 id="modal-defect-title">결과 기록 추가</h2>
       <button class="modal-close" data-close="modal-defect">&times;</button>
     </div>
     <div class="modal-body">
@@ -543,14 +578,14 @@ table.data-table .del-cell:hover{color:var(--red);}
           <select id="defect-proc"></select>
         </div>
         <div class="field">
-          <label>불량 유형</label>
-          <input type="text" id="defect-type" placeholder="예: 치수불량, 외관불량, 미체결">
+          <label>결과 유형</label>
+          <input type="text" id="defect-type" placeholder="예: 치수불량, 외관불량, 미체결, 양품">
         </div>
       </div>
       <div class="form-grid" style="margin-top:14px;">
         <div class="field">
-          <label>불량 수량</label>
-          <input type="number" id="defect-qty" class="mono" value="1" min="1">
+          <label>수량</label>
+          <input type="number" id="defect-qty" class="mono" placeholder="수량을 입력하세요" min="0" step="1">
         </div>
         <div class="field">
           <label>총 생산수량 (해당 시점)</label>
@@ -564,7 +599,7 @@ table.data-table .del-cell:hover{color:var(--red);}
     </div>
     <div class="modal-foot">
       <button class="btn" data-close="modal-defect">취소</button>
-      <button class="btn btn-primary" id="btn-save-defect">기록 저장</button>
+      <button class="btn btn-primary" id="btn-save-defect">결과 저장</button>
     </div>
   </div>
 </div>
