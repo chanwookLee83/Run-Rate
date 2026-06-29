@@ -1,0 +1,1505 @@
+// ===================================================================
+// RUN & RATE PWA — 양산 초기 검증 + 공정별 CPK 분석
+// 저장방식: Firebase Firestore (개인 사용 전용, 실시간 동기화 + 오프라인 캐시)
+// ===================================================================
+
+let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
+let DB = { projects: [] };
+let state = {
+  activeProjectId: null,
+  activeTab: 'overview',
+  activeProcessId: null,      // 분석 탭에서 선택된 공정
+  cpkProcessId: null,         // CPK 탭에서 선택된 공정
+  cpkInputMode: 'raw',        // 'raw' (개별측정값) | 'stats' (통계값직접입력)
+  timer: { running:false, startTs:0, intervalId:null },
+  connected: false,
+  unsubProjects: null,
+  unsubDetail: []            // 활성 프로젝트의 서브컬렉션 리스너들 (전환 시 해제)
+};
+
+// ---------- Utility ----------
+function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+function nowISO(){ return new Date().toISOString(); }
+function fmtDate(ts){
+  const d = new Date(ts);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+}
+function fmtDateShort(iso){
+  const d = new Date(iso);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function round(n, d=2){
+  if(n===null||n===undefined||isNaN(n)) return null;
+  const f = Math.pow(10,d);
+  return Math.round(n*f)/f;
+}
+function escapeHtml(s){
+  if(s===null||s===undefined) return '';
+  return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function toast(msg, type=''){
+  const wrap = document.getElementById('toast-wrap');
+  const el = document.createElement('div');
+  el.className = 'toast' + (type ? ' t-'+type : '');
+  el.textContent = msg;
+  wrap.appendChild(el);
+  setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(()=>el.remove(), 300); }, 2600);
+}
+function setConnStatus(connected){
+  state.connected = connected;
+  const dot = document.getElementById('conn-dot');
+  const label = document.getElementById('conn-label');
+  if(dot) dot.style.background = connected ? 'var(--green)' : 'var(--red)';
+  if(label) label.textContent = connected ? 'Firestore 연결됨' : '연결 끊김 (오프라인 캐시 사용 중)';
+}
+
+// ---------- Persistence (Firestore) ----------
+// 주의: 측정 데이터(cycles/defects/raw 등)는 절대 배열 전체를 덮어쓰지 않음.
+//       항상 addDoc(추가)/deleteDoc(단일삭제)만 사용 — 머신카드 데이터손실 버그 재발 방지.
+
+function projectsCol(){ return fb.collection(fb.db, 'projects'); }
+function processesCol(pid){ return fb.collection(fb.db, 'projects', pid, 'processes'); }
+function cyclesCol(pid){ return fb.collection(fb.db, 'projects', pid, 'cycles'); }
+function defectsCol(pid){ return fb.collection(fb.db, 'projects', pid, 'defects'); }
+function cpkCol(pid){ return fb.collection(fb.db, 'projects', pid, 'cpkData'); }
+
+// 최상위 프로젝트 목록 실시간 구독 (앱 시작 시 1회만 호출)
+function subscribeProjects(){
+  state.unsubProjects = fb.onSnapshot(projectsCol(), (snap)=>{
+    setConnStatus(true);
+    const prevActiveId = state.activeProjectId;
+    const newList = snap.docs.map(d=>{
+      const data = d.data();
+      const existing = getProject(d.id);
+      return {
+        id: d.id,
+        pn: data.pn, pname: data.pname,
+        targetUph: data.targetUph ?? null,
+        targetQty: data.targetQty ?? null,
+        remark: data.remark || '',
+        createdAt: data.createdAt || nowISO(),
+        // 상세 서브컬렉션은 별도 리스너가 채움. 기존 값 보존(프로젝트 목록 갱신 시 상세 날아가지 않게).
+        processes: existing? existing.processes : [],
+        cycles: existing? existing.cycles : {},
+        defects: existing? existing.defects : [],
+        cpkData: existing? existing.cpkData : {}
+      };
+    });
+    DB.projects = newList;
+    renderSidebar();
+    if(prevActiveId && !getProject(prevActiveId)){
+      // 활성 프로젝트가 삭제된 경우 (다른 기기에서 삭제했을 수도 있음)
+      state.activeProjectId = null;
+      document.getElementById('proj-view').style.display='none';
+      document.getElementById('main-empty').style.display='flex';
+    } else if(prevActiveId){
+      renderProjectHeader();
+      if(document.getElementById('proj-view').style.display !== 'none') renderContent();
+    }
+  }, (err)=>{
+    console.error('projects listener error', err);
+    setConnStatus(false);
+    toast('Firestore 연결 오류: ' + err.message, 'error');
+  });
+}
+
+// 프로젝트 선택 시 해당 프로젝트의 서브컬렉션 4개를 실시간 구독
+function subscribeProjectDetail(pid){
+  // 이전 구독 해제
+  state.unsubDetail.forEach(u=>u());
+  state.unsubDetail = [];
+
+  const u1 = fb.onSnapshot(fb.query(processesCol(pid), fb.orderBy('seq')), (snap)=>{
+    const proj = getProject(pid);
+    if(!proj) return;
+    proj.processes = snap.docs.map(d=> ({ id:d.id, ...d.data() }));
+    if(document.getElementById('proj-view').style.display !== 'none'){
+      renderProjectHeader(); renderContent(); renderSidebar();
+    }
+  }, (err)=>{ console.error('processes listener error', err); });
+
+  const u2 = fb.onSnapshot(cyclesCol(pid), (snap)=>{
+    const proj = getProject(pid);
+    if(!proj) return;
+    const byProc = {};
+    snap.docs.forEach(d=>{
+      const c = d.data();
+      if(!byProc[c.processId]) byProc[c.processId] = [];
+      byProc[c.processId].push({ id:d.id, ts: c.ts, ct: c.ct });
+    });
+    proj.cycles = byProc;
+    if(state.timer.running){
+      // 타이머 작동 중엔 전체 재렌더(분석탭 DOM 재생성) 대신 기록 테이블만 갱신해 타이머가 끊기지 않게 함
+      refreshCycleTableOnly(proj);
+    } else if(state.activeTab==='analysis' || state.activeTab==='overview'){
+      renderContent();
+    }
+    renderSidebar();
+  }, (err)=>{ console.error('cycles listener error', err); });
+
+  const u3 = fb.onSnapshot(defectsCol(pid), (snap)=>{
+    const proj = getProject(pid);
+    if(!proj) return;
+    proj.defects = snap.docs.map(d=> ({ id:d.id, ...d.data() }));
+    if(state.activeTab==='history' || state.activeTab==='overview') renderContent();
+    renderSidebar();
+  }, (err)=>{ console.error('defects listener error', err); });
+
+  const u4 = fb.onSnapshot(cpkCol(pid), (snap)=>{
+    const proj = getProject(pid);
+    if(!proj) return;
+    const byProc = {};
+    snap.docs.forEach(d=>{ byProc[d.id] = d.data(); });
+    proj.cpkData = byProc;
+    if(state.activeTab==='cpk' || state.activeTab==='overview') renderContent();
+    renderSidebar();
+  }, (err)=>{ console.error('cpkData listener error', err); });
+
+  state.unsubDetail = [u1,u2,u3,u4];
+}
+
+// ---------- Data model helpers ----------
+function getProject(id){ return DB.projects.find(p=>p.id===id); }
+function activeProject(){ return getProject(state.activeProjectId); }
+
+function newProjectData(data){
+  return {
+    pn: data.pn,
+    pname: data.pname,
+    targetUph: data.targetUph || null,
+    targetQty: data.targetQty || null,
+    remark: data.remark || '',
+    createdAt: nowISO()
+  };
+}
+
+function projectStatus(proj){
+  const procs = proj.processes;
+  if(procs.length === 0) return 'warn';
+  let worst = 'good';
+  procs.forEach(p=>{
+    const r = computeRate(proj, p.id);
+    const c = computeCpkSummary(proj, p.id);
+    let s = 'good';
+    if(r.ratePct !== null && r.ratePct < 90) s = 'bad';
+    else if(r.ratePct !== null && r.ratePct < 100) s = 'warn';
+    if(c.cpk !== null){
+      if(c.cpk < 1.0 && s!=='bad') s = 'bad';
+      else if(c.cpk < 1.33 && s==='good') s = 'warn';
+    }
+    if(s==='bad') worst='bad';
+    else if(s==='warn' && worst!=='bad') worst='warn';
+  });
+  return worst;
+}
+
+// ---------- Cycle time / Rate calculations ----------
+function getCycles(proj, processId){
+  return (proj.cycles[processId] || []).slice().sort((a,b)=> a.ts - b.ts);
+}
+function computeRate(proj, processId){
+  const proc = proj.processes.find(p=>p.id===processId);
+  const cycles = getCycles(proj, processId);
+  if(!proc || cycles.length===0) return { avgCt:null, uph:null, ratePct:null, n:0, minCt:null, maxCt:null, stdCt:null };
+  const cts = cycles.map(c=>c.ct);
+  const avgCt = cts.reduce((a,b)=>a+b,0)/cts.length;
+  const uph = avgCt > 0 ? 3600/avgCt : null;
+  let ratePct = null;
+  if(proc.targetCt && proc.targetCt > 0){
+    ratePct = (proc.targetCt/avgCt)*100;
+  }
+  const meanV = avgCt;
+  const variance = cts.reduce((s,v)=>s+Math.pow(v-meanV,2),0)/cts.length;
+  return {
+    avgCt: round(avgCt,2),
+    uph: uph!==null? round(uph,1): null,
+    ratePct: ratePct!==null? round(ratePct,1): null,
+    n: cts.length,
+    minCt: round(Math.min(...cts),2),
+    maxCt: round(Math.max(...cts),2),
+    stdCt: round(Math.sqrt(variance),3)
+  };
+}
+
+function projectOverallRate(proj){
+  if(proj.processes.length===0) return null;
+  let min = null;
+  proj.processes.forEach(p=>{
+    const r = computeRate(proj, p.id);
+    if(r.ratePct !== null){
+      if(min===null || r.ratePct < min) min = r.ratePct;
+    }
+  });
+  return min;
+}
+function findBottleneck(proj){
+  let bottleneck = null, maxCt = -1;
+  proj.processes.forEach(p=>{
+    const r = computeRate(proj, p.id);
+    if(r.avgCt !== null && r.avgCt > maxCt){ maxCt = r.avgCt; bottleneck = p; }
+  });
+  return bottleneck;
+}
+
+// ---------- Defect rate ----------
+function defectSummary(proj, processId){
+  const list = processId ? proj.defects.filter(d=>d.processId===processId) : proj.defects;
+  const totalDefect = list.reduce((s,d)=>s+Number(d.qty||0),0);
+  const totalProduced = list.length ? Math.max(...list.map(d=>Number(d.total||0))) : 0;
+  const ppm = totalProduced>0 ? round((totalDefect/totalProduced)*1000000,0) : null;
+  const defectRate = totalProduced>0 ? round((totalDefect/totalProduced)*100,3) : null;
+  return { totalDefect, totalProduced, ppm, defectRate, count: list.length };
+}
+
+// ---------- CPK calculations ----------
+function meanArr(arr){ return arr.reduce((a,b)=>a+b,0)/arr.length; }
+function stdDev(arr){
+  const m = meanArr(arr);
+  const v = arr.reduce((s,x)=>s+Math.pow(x-m,2),0)/(arr.length-1); // sample std dev (n-1)
+  return Math.sqrt(v);
+}
+function computeCpk({mean:m, sd, usl, lsl}){
+  if(sd===0 || sd===null || sd===undefined || isNaN(sd)) return null;
+  if((usl===null||usl===undefined) && (lsl===null||lsl===undefined)) return null;
+  let cpu = (usl!==null && usl!==undefined) ? (usl - m) / (3*sd) : Infinity;
+  let cpl = (lsl!==null && lsl!==undefined) ? (m - lsl) / (3*sd) : Infinity;
+  return Math.min(cpu, cpl);
+}
+function computeCp({sd, usl, lsl}){
+  if(sd===0 || !sd || usl===null||usl===undefined||lsl===null||lsl===undefined) return null;
+  return (usl-lsl)/(6*sd);
+}
+function cpkGrade(cpk){
+  if(cpk===null) return {label:'데이터 없음', cls:'warn'};
+  if(cpk >= 1.67) return {label:'매우 우수 (S급)', cls:'good'};
+  if(cpk >= 1.33) return {label:'양호 (합격)', cls:'good'};
+  if(cpk >= 1.0) return {label:'관리 필요 (주의)', cls:'warn'};
+  return {label:'불합격 (개선 필요)', cls:'bad'};
+}
+
+function computeCpkSummary(proj, processId){
+  const cd = proj.cpkData[processId];
+  if(!cd) return { cpk:null, cp:null, m:null, sd:null, n:0 };
+  let m=null, sd=null, n=0;
+  if(cd.mode === 'raw'){
+    const vals = (cd.raw||[]).map(Number).filter(v=>!isNaN(v));
+    n = vals.length;
+    if(n < 2) return { cpk:null, cp:null, m:null, sd:null, n, usl: cd.usl, lsl: cd.lsl };
+    m = meanArr(vals);
+    sd = stdDev(vals);
+  } else {
+    if(!cd.statsMean || !cd.statsSd) return { cpk:null, cp:null, m:null, sd:null, n:cd.statsN||0, usl: cd.usl, lsl: cd.lsl };
+    m = Number(cd.statsMean);
+    sd = Number(cd.statsSd);
+    n = Number(cd.statsN)||0;
+  }
+  const usl = cd.usl!==undefined && cd.usl!==null && cd.usl!=='' ? Number(cd.usl) : null;
+  const lsl = cd.lsl!==undefined && cd.lsl!==null && cd.lsl!=='' ? Number(cd.lsl) : null;
+  const cpk = computeCpk({mean:m, sd, usl, lsl});
+  const cp = computeCp({sd, usl, lsl});
+  return { cpk: cpk!==null? round(cpk,3): null, cp: cp!==null? round(cp,3): null, m: round(m,4), sd: round(sd,4), n, usl, lsl, target: cd.target };
+}
+
+// ===================================================================
+// RENDERING
+// ===================================================================
+
+function renderSidebar(){
+  const list = document.getElementById('proj-list');
+  if(DB.projects.length===0){
+    list.innerHTML = '<div class="sb-empty">등록된 프로젝트가 없습니다.<br>상단의 "신규" 버튼으로<br>품번 프로젝트를 생성하세요.</div>';
+    return;
+  }
+  list.innerHTML = DB.projects.slice().sort((a,b)=> b.createdAt.localeCompare(a.createdAt)).map(p=>{
+    const status = projectStatus(p);
+    const chipClass = status==='good'?'chip-green':status==='warn'?'chip-amber':'chip-red';
+    const chipLabel = status==='good'?'정상':status==='warn'?'주의':'경고';
+    return `<div class="proj-item ${p.id===state.activeProjectId?'active':''}" data-id="${p.id}">
+      <div class="pn">${escapeHtml(p.pn)}</div>
+      <div class="pname">${escapeHtml(p.pname)}</div>
+      <div class="pmeta">
+        <span>공정 ${p.processes.length}개</span>
+        <span class="chip ${chipClass}">${chipLabel}</span>
+      </div>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('.proj-item').forEach(el=>{
+    el.addEventListener('click', ()=>selectProject(el.dataset.id));
+  });
+}
+
+function selectProject(id){
+  state.activeProjectId = id;
+  state.activeProcessId = null;
+  state.cpkProcessId = null;
+  state.activeTab = 'overview';
+  document.getElementById('main-empty').style.display='none';
+  document.getElementById('proj-view').style.display='flex';
+  subscribeProjectDetail(id);
+  renderSidebar();
+  renderProjectHeader();
+  setTab('overview');
+}
+
+function renderProjectHeader(){
+  const proj = activeProject();
+  if(!proj) return;
+  document.getElementById('ph-pn').textContent = proj.pn;
+  document.getElementById('ph-name').textContent = proj.pname;
+  document.getElementById('ph-meta').textContent = `등록일 ${fmtDateShort(proj.createdAt)} · 공정 ${proj.processes.length}개${proj.remark ? ' · '+proj.remark : ''}`;
+  document.getElementById('badge-proc-count').textContent = proj.processes.length;
+}
+
+function setTab(tab){
+  state.activeTab = tab;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===tab));
+  renderContent();
+}
+
+function renderContent(){
+  const proj = activeProject();
+  if(!proj) return;
+  const root = document.getElementById('content');
+  if(state.activeTab === 'overview') root.innerHTML = renderOverview(proj);
+  else if(state.activeTab === 'process') root.innerHTML = renderProcessTab(proj);
+  else if(state.activeTab === 'analysis') root.innerHTML = renderAnalysisTab(proj);
+  else if(state.activeTab === 'cpk') root.innerHTML = renderCpkTab(proj);
+  else if(state.activeTab === 'history') root.innerHTML = renderHistoryTab(proj);
+  attachContentEvents(proj);
+}
+
+// ---------- OVERVIEW ----------
+function renderOverview(proj){
+  const overallRate = projectOverallRate(proj);
+  const bottleneck = findBottleneck(proj);
+  const ds = defectSummary(proj, null);
+  let cpkWorst=null;
+  proj.processes.forEach(p=>{
+    const c = computeCpkSummary(proj, p.id);
+    if(c.cpk!==null){
+      if(cpkWorst===null || c.cpk < cpkWorst) cpkWorst = c.cpk;
+    }
+  });
+
+  const rateStatus = overallRate===null? '' : overallRate>=100?'status-good':overallRate>=90?'status-warn':'status-bad';
+  const rateValClass = overallRate===null? '' : overallRate>=100?'good':overallRate>=90?'warn':'bad';
+  const cpkStatus = cpkWorst===null? '' : cpkWorst>=1.33?'status-good':cpkWorst>=1.0?'status-warn':'status-bad';
+  const cpkValClass = cpkWorst===null? '' : cpkWorst>=1.33?'good':cpkWorst>=1.0?'warn':'bad';
+  const defStatus = ds.defectRate===null? '' : ds.defectRate<=1?'status-good':ds.defectRate<=3?'status-warn':'status-bad';
+  const defValClass = ds.defectRate===null? '' : ds.defectRate<=1?'good':ds.defectRate<=3?'warn':'bad';
+
+  return `
+  <div class="kpi-strip">
+    <div class="kpi-card ${rateStatus}">
+      <div class="kpi-label">라인 Rate% (병목기준)</div>
+      <div class="kpi-value ${rateValClass}">${overallRate!==null? overallRate : '—'}<span class="kpi-unit">%</span></div>
+      <div class="kpi-sub">목표 100% 대비</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">병목 공정</div>
+      <div class="kpi-value" style="font-size:18px;">${bottleneck? escapeHtml(bottleneck.name) : '—'}</div>
+      <div class="kpi-sub">${bottleneck? 'Avg C/T '+computeRate(proj,bottleneck.id).avgCt+'초' : '측정 데이터 없음'}</div>
+    </div>
+    <div class="kpi-card ${cpkStatus}">
+      <div class="kpi-label">최저 CPK (공정중)</div>
+      <div class="kpi-value ${cpkValClass}">${cpkWorst!==null? cpkWorst.toFixed(2) : '—'}</div>
+      <div class="kpi-sub">${cpkWorst!==null? cpkGrade(cpkWorst).label : '측정 데이터 없음'}</div>
+    </div>
+    <div class="kpi-card ${defStatus}">
+      <div class="kpi-label">불량률</div>
+      <div class="kpi-value ${defValClass}">${ds.defectRate!==null? ds.defectRate : '—'}<span class="kpi-unit">%</span></div>
+      <div class="kpi-sub">${ds.totalDefect}건 / 생산 ${ds.totalProduced}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">목표 수량 진척</div>
+      <div class="kpi-value">${proj.targetQty? round((ds.totalProduced/proj.targetQty)*100,1)+'%' : '—'}</div>
+      <div class="kpi-sub">${proj.targetQty? ds.totalProduced+' / '+proj.targetQty : '목표 미설정'}</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h3>공정별 현황 요약</h3>
+      <span class="ph-tag">${proj.processes.length}개 공정</span>
+    </div>
+    <div class="panel-body" style="padding:0;">
+      ${proj.processes.length===0 ? `<div class="mini-empty"><div class="ico">⚙</div><p>아직 등록된 공정이 없습니다. "공정 등록" 탭에서 조립 공정을 추가하세요.</p></div>` : `
+      <div class="col-headers"><div></div><div>공정명</div><div>Avg C/T</div><div>UPH</div><div>Rate%</div><div>CPK</div><div></div></div>
+      ${proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>{
+        const r = computeRate(proj, p.id);
+        const c = computeCpkSummary(proj, p.id);
+        const rateClass = r.ratePct===null?'':r.ratePct>=100?'chip-green':r.ratePct>=90?'chip-amber':'chip-red';
+        const cpkClass = c.cpk===null?'':c.cpk>=1.33?'chip-green':c.cpk>=1.0?'chip-amber':'chip-red';
+        return `<div class="process-row" data-goto-process="${p.id}">
+          <div class="proc-num">${p.seq}</div>
+          <div class="proc-name">${escapeHtml(p.name)}${p.eq?`<span class="proc-eq">${escapeHtml(p.eq)}</span>`:''}</div>
+          <div class="mono">${r.avgCt!==null? r.avgCt+'초' : '—'}</div>
+          <div class="mono">${r.uph!==null? r.uph : '—'}</div>
+          <div><span class="rate-pill ${rateClass}">${r.ratePct!==null? r.ratePct+'%' : '—'}</span></div>
+          <div><span class="rate-pill ${cpkClass}">${c.cpk!==null? c.cpk.toFixed(2) : '—'}</span></div>
+          <div></div>
+        </div>`;
+      }).join('')}
+      `}
+    </div>
+  </div>`;
+}
+
+// ---------- PROCESS REGISTER TAB ----------
+function renderProcessTab(proj){
+  return `
+  <div class="panel">
+    <div class="panel-head">
+      <h3>등록된 조립 공정 (순서대로)</h3>
+      <button class="btn btn-primary btn-sm" id="btn-open-process-modal">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        공정 추가/수정
+      </button>
+    </div>
+    <div class="panel-body" style="padding:0;">
+      ${proj.processes.length===0 ? `<div class="mini-empty"><div class="ico">📋</div><p>품번 ${escapeHtml(proj.pn)}의 조립 공정을 등록하세요.<br>예: 1차 압입 → 부품 체결 → 토크 검사 → 외관 검사</p></div>` : `
+      <div class="col-headers"><div></div><div>공정명 / 설비</div><div>목표 C/T</div><div>측정수</div><div>Avg C/T</div><div></div><div></div></div>
+      ${proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>{
+        const r = computeRate(proj, p.id);
+        return `<div class="process-row">
+          <div class="proc-num">${p.seq}</div>
+          <div class="proc-name">${escapeHtml(p.name)}${p.eq?`<span class="proc-eq">${escapeHtml(p.eq)}</span>`:''}</div>
+          <div class="mono">${p.targetCt? p.targetCt+'초' : '미설정'}</div>
+          <div class="mono">${r.n}건</div>
+          <div class="mono">${r.avgCt!==null? r.avgCt+'초' : '—'}</div>
+          <div></div>
+          <div class="row-actions">
+            <div class="icon-mini" data-del-process="${p.id}" title="삭제">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+      `}
+    </div>
+  </div>`;
+}
+
+// ---------- ANALYSIS TAB ----------
+function renderAnalysisTab(proj){
+  if(proj.processes.length===0){
+    return `<div class="panel"><div class="panel-body"><div class="mini-empty"><div class="ico">📊</div><p>먼저 "공정 등록" 탭에서 공정을 추가하세요.</p></div></div></div>`;
+  }
+  if(!state.activeProcessId || !proj.processes.find(p=>p.id===state.activeProcessId)){
+    state.activeProcessId = proj.processes.slice().sort((a,b)=>a.seq-b.seq)[0].id;
+  }
+  const proc = proj.processes.find(p=>p.id===state.activeProcessId);
+  const r = computeRate(proj, proc.id);
+  const cycles = getCycles(proj, proc.id).slice().reverse();
+
+  const rateClass = r.ratePct===null?'':r.ratePct>=100?'good':r.ratePct>=90?'warn':'bad';
+
+  return `
+  <div class="analysis-toolbar">
+    <div class="proc-selector">
+      ${proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>`<div class="proc-chip ${p.id===proc.id?'active':''}" data-select-process="${p.id}">${p.seq}. ${escapeHtml(p.name)}</div>`).join('')}
+    </div>
+    <button class="btn btn-sm" id="btn-export-cycles">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      CSV 다운로드
+    </button>
+  </div>
+
+  <div class="kpi-strip" id="analysis-kpi-strip" style="grid-template-columns:repeat(4,1fr);">
+    <div class="kpi-card">
+      <div class="kpi-label">평균 사이클타임</div>
+      <div class="kpi-value">${r.avgCt!==null?r.avgCt:'—'}<span class="kpi-unit">초</span></div>
+      <div class="kpi-sub">Min ${r.minCt??'—'} / Max ${r.maxCt??'—'} / σ ${r.stdCt??'—'}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">UPH (시간당 생산량)</div>
+      <div class="kpi-value">${r.uph!==null?r.uph:'—'}<span class="kpi-unit">EA/h</span></div>
+      <div class="kpi-sub">목표 C/T ${proc.targetCt? proc.targetCt+'초' : '미설정'}</div>
+    </div>
+    <div class="kpi-card ${rateClass!==''?'status-'+rateClass:''}">
+      <div class="kpi-label">Rate %</div>
+      <div class="kpi-value ${rateClass}">${r.ratePct!==null?r.ratePct:'—'}<span class="kpi-unit">%</span></div>
+      <div class="kpi-sub">목표C/T ÷ 실측Avg C/T</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">측정 횟수</div>
+      <div class="kpi-value">${r.n}<span class="kpi-unit">건</span></div>
+      <div class="kpi-sub">${cycles.length>0? '최근 '+fmtDate(cycles[0].ts) : '측정 없음'}</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h3>사이클타임 측정 입력</h3></div>
+    <div class="panel-body">
+      <div class="cycle-input-panel">
+        <div class="timer-display" id="timer-display">00.0</div>
+        <button class="btn btn-primary" id="btn-timer-toggle">측정 시작</button>
+        <button class="btn" id="btn-timer-lap" disabled>랩 기록 (Enter)</button>
+        <div class="field" style="max-width:160px;">
+          <label>또는 직접 입력 (초)</label>
+          <input type="number" step="0.01" id="manual-ct-input" class="mono" placeholder="예: 28.5">
+        </div>
+        <button class="btn" id="btn-manual-ct-add">추가</button>
+      </div>
+      <p style="font-size:11px; color:var(--gauge-grey);">측정 시작 후 한 사이클이 끝날 때마다 "랩 기록"을 누르거나 Enter를 누르면 자동 기록됩니다.</p>
+    </div>
+  </div>
+
+  <div class="panel" id="cycle-record-panel">
+    <div class="panel-head">
+      <h3>측정 기록</h3>
+      <span class="ph-tag">${cycles.length}건</span>
+    </div>
+    <div class="panel-body" style="padding:0; max-height:360px; overflow-y:auto;">
+      ${cycles.length===0? `<div class="mini-empty"><div class="ico">⏱</div><p>측정된 사이클타임이 없습니다.</p></div>` : `
+      <table class="data-table">
+        <thead><tr><th>#</th><th>측정시각</th><th>사이클타임(초)</th><th></th></tr></thead>
+        <tbody>
+        ${cycles.map((c,i)=>`<tr><td>${cycles.length-i}</td><td>${fmtDate(c.ts)}</td><td>${c.ct.toFixed(2)}</td><td class="del-cell" data-del-cycle="${c.id}">삭제</td></tr>`).join('')}
+        </tbody>
+      </table>`}
+    </div>
+  </div>`;
+}
+
+// ---------- CPK TAB ----------
+function renderCpkTab(proj){
+  if(proj.processes.length===0){
+    return `<div class="panel"><div class="panel-body"><div class="mini-empty"><div class="ico">📐</div><p>먼저 "공정 등록" 탭에서 공정을 추가하세요.</p></div></div></div>`;
+  }
+  if(!state.cpkProcessId || !proj.processes.find(p=>p.id===state.cpkProcessId)){
+    state.cpkProcessId = proj.processes.slice().sort((a,b)=>a.seq-b.seq)[0].id;
+  }
+  const proc = proj.processes.find(p=>p.id===state.cpkProcessId);
+  if(!proj.cpkData[proc.id]) proj.cpkData[proc.id] = { mode:'raw', raw:[], usl:null, lsl:null, target:null, statsMean:null, statsSd:null, statsN:null, itemName:'', unit:'' };
+  const cd = proj.cpkData[proc.id];
+  state.cpkInputMode = cd.mode || 'raw';
+  const summary = computeCpkSummary(proj, proc.id);
+  const grade = cpkGrade(summary.cpk);
+
+  return `
+  <div class="analysis-toolbar">
+    <div class="proc-selector">
+      ${proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>`<div class="proc-chip ${p.id===proc.id?'active':''}" data-select-cpk-process="${p.id}">${p.seq}. ${escapeHtml(p.name)}</div>`).join('')}
+    </div>
+    <button class="btn btn-sm" id="btn-export-cpk">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      CSV 다운로드
+    </button>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h3>측정 항목 / 규격 설정</h3></div>
+    <div class="panel-body">
+      <div class="form-grid cols-3">
+        <div class="field">
+          <label>측정 항목명</label>
+          <input type="text" id="cpk-item-name" value="${escapeHtml(cd.itemName||'')}" placeholder="예: 압입 깊이">
+        </div>
+        <div class="field">
+          <label>단위</label>
+          <input type="text" id="cpk-unit" value="${escapeHtml(cd.unit||'')}" placeholder="예: mm, N, sec">
+        </div>
+        <div class="field">
+          <label>목표값 (Target)</label>
+          <input type="number" step="any" id="cpk-target" class="mono" value="${cd.target??''}" placeholder="예: 10.0">
+        </div>
+        <div class="field">
+          <label>USL (상한)</label>
+          <input type="number" step="any" id="cpk-usl" class="mono" value="${cd.usl??''}" placeholder="예: 10.5">
+        </div>
+        <div class="field">
+          <label>LSL (하한)</label>
+          <input type="number" step="any" id="cpk-lsl" class="mono" value="${cd.lsl??''}" placeholder="예: 9.5">
+        </div>
+        <div class="field" style="justify-content:flex-end;">
+          <button class="btn btn-sm" id="btn-save-spec">규격 저장</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cpk-layout">
+    <div class="cpk-gauge-box">
+      <div class="kpi-label" style="margin-bottom:4px;">CPK 지수</div>
+      <div class="cpk-big ${grade.cls}">${summary.cpk!==null? summary.cpk.toFixed(2) : '—'}</div>
+      <div class="cpk-grade" style="background:${grade.cls==='good'?'var(--green-soft)':grade.cls==='warn'?'var(--amber-soft)':'var(--red-soft)'}; color:${grade.cls==='good'?'var(--green)':grade.cls==='warn'?'#9A6B1F':'var(--red)'};">${grade.label}</div>
+      <div class="cpk-stats">
+        <div class="cpk-stat"><div class="lbl">CP</div><div class="val">${summary.cp!==null?summary.cp.toFixed(2):'—'}</div></div>
+        <div class="cpk-stat"><div class="lbl">표본수 N</div><div class="val">${summary.n}</div></div>
+        <div class="cpk-stat"><div class="lbl">평균</div><div class="val">${summary.m??'—'}</div></div>
+        <div class="cpk-stat"><div class="lbl">표준편차σ</div><div class="val">${summary.sd??'—'}</div></div>
+      </div>
+      <div style="margin-top:14px;">${renderCpkSvg(summary)}</div>
+    </div>
+
+    <div class="panel" style="margin-bottom:0;">
+      <div class="panel-head">
+        <h3>측정 데이터 입력</h3>
+        <div class="input-mode-toggle">
+          <button class="imt-btn ${state.cpkInputMode==='raw'?'active':''}" data-cpk-mode="raw">개별 측정값</button>
+          <button class="imt-btn ${state.cpkInputMode==='stats'?'active':''}" data-cpk-mode="stats">통계값 직접입력</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        ${state.cpkInputMode==='raw' ? renderCpkRawInput(cd) : renderCpkStatsInput(cd)}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderCpkSvg(summary){
+  const w=240, h=110;
+  if(summary.m===null || summary.sd===null || summary.sd===0){
+    return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><text x="${w/2}" y="${h/2}" text-anchor="middle" fill="#9CA3AF" font-size="11" font-family="Inter">데이터 부족</text></svg>`;
+  }
+  const usl = summary.usl, lsl = summary.lsl, m = summary.m, sd = summary.sd;
+  const lo = Math.min(lsl??m-4*sd, m-4*sd);
+  const hi = Math.max(usl??m+4*sd, m+4*sd);
+  const range = hi-lo;
+  const xPos = v => 10 + ((v-lo)/range)*(w-20);
+  const pts = [];
+  for(let i=0;i<=60;i++){
+    const x = lo + (range*i/60);
+    const z = (x-m)/sd;
+    const y = Math.exp(-0.5*z*z);
+    pts.push([xPos(x), 95 - y*75]);
+  }
+  const path = 'M ' + pts.map(p=>p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' L ');
+  const baseline = 95;
+  let specLines = '';
+  if(usl!==null && usl!==undefined){
+    const x = xPos(usl);
+    specLines += `<line x1="${x}" y1="15" x2="${x}" y2="${baseline}" stroke="#C2410C" stroke-width="1.5" stroke-dasharray="3,2"/><text x="${x}" y="10" text-anchor="middle" font-size="9" fill="#C2410C" font-family="JetBrains Mono">USL</text>`;
+  }
+  if(lsl!==null && lsl!==undefined){
+    const x = xPos(lsl);
+    specLines += `<line x1="${x}" y1="15" x2="${x}" y2="${baseline}" stroke="#C2410C" stroke-width="1.5" stroke-dasharray="3,2"/><text x="${x}" y="10" text-anchor="middle" font-size="9" fill="#C2410C" font-family="JetBrains Mono">LSL</text>`;
+  }
+  const mx = xPos(m);
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
+    <line x1="10" y1="${baseline}" x2="${w-10}" y2="${baseline}" stroke="#E4E1D8" stroke-width="1"/>
+    <path d="${path}" fill="none" stroke="#2B5C8A" stroke-width="2"/>
+    <line x1="${mx}" y1="20" x2="${mx}" y2="${baseline}" stroke="#2B5C8A" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+    ${specLines}
+  </svg>`;
+}
+
+function renderCpkRawInput(cd){
+  const raw = cd.raw || [];
+  return `
+  <div class="field" style="margin-bottom:12px;">
+    <label>측정값 일괄 입력 (쉼표 또는 줄바꿈으로 구분)</label>
+    <textarea id="cpk-raw-bulk" rows="2" class="mono" placeholder="예: 10.02, 9.98, 10.05, 9.99, 10.01"></textarea>
+  </div>
+  <button class="btn btn-sm" id="btn-add-bulk-raw">일괄 추가</button>
+  <div style="margin-top:14px;">
+    <table class="data-table">
+      <thead><tr><th>#</th><th>측정값</th><th></th></tr></thead>
+      <tbody id="cpk-raw-tbody">
+      ${raw.map((v,i)=>{
+        const out = (cd.usl!==null && cd.usl!=='' && v>Number(cd.usl)) || (cd.lsl!==null && cd.lsl!=='' && v<Number(cd.lsl));
+        return `<tr><td>${i+1}</td><td class="${out?'spec-out':''}">${v}</td><td class="del-cell" data-del-raw="${i}">삭제</td></tr>`;
+      }).join('')}
+      </tbody>
+    </table>
+    ${raw.length===0? '<div class="mini-empty"><p>측정값을 입력하세요. (CPK 계산에는 최소 2개 이상 필요, 신뢰도를 위해 25개 이상 권장)</p></div>':''}
+  </div>`;
+}
+
+function renderCpkStatsInput(cd){
+  return `
+  <div class="form-grid cols-3">
+    <div class="field">
+      <label>평균 (X̄)</label>
+      <input type="number" step="any" id="cpk-stats-mean" class="mono" value="${cd.statsMean??''}" placeholder="예: 10.01">
+    </div>
+    <div class="field">
+      <label>표준편차 (σ)</label>
+      <input type="number" step="any" id="cpk-stats-sd" class="mono" value="${cd.statsSd??''}" placeholder="예: 0.08">
+    </div>
+    <div class="field">
+      <label>표본수 (N)</label>
+      <input type="number" id="cpk-stats-n" class="mono" value="${cd.statsN??''}" placeholder="예: 30">
+    </div>
+  </div>
+  <button class="btn btn-sm" id="btn-save-stats" style="margin-top:14px;">통계값 저장</button>
+  <p style="font-size:11px; color:var(--gauge-grey); margin-top:10px; line-height:1.6;">게이지/측정기에서 이미 산출된 평균·표준편차를 직접 입력하는 방식입니다. USL/LSL은 위 "측정 항목 / 규격 설정"에서 입력하세요.</p>`;
+}
+
+// ---------- HISTORY TAB ----------
+function renderHistoryTab(proj){
+  const defects = proj.defects.slice().sort((a,b)=> b.ts - a.ts);
+  const ds = defectSummary(proj, null);
+  return `
+  <div class="kpi-strip" style="grid-template-columns:repeat(3,1fr); margin-bottom:18px;">
+    <div class="kpi-card">
+      <div class="kpi-label">총 불량 건수</div>
+      <div class="kpi-value">${ds.totalDefect}<span class="kpi-unit">건</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">불량률</div>
+      <div class="kpi-value">${ds.defectRate??'—'}<span class="kpi-unit">%</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">PPM</div>
+      <div class="kpi-value">${ds.ppm??'—'}</div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-head">
+      <h3>불량 이력</h3>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-sm" id="btn-export-defects">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          CSV
+        </button>
+        <button class="btn btn-primary btn-sm" id="btn-open-defect-modal">+ 불량 기록</button>
+      </div>
+    </div>
+    <div class="panel-body" style="padding:0;">
+      ${defects.length===0? `<div class="mini-empty"><div class="ico">✓</div><p>기록된 불량이 없습니다.</p></div>` : defects.map(d=>{
+        const proc = proj.processes.find(p=>p.id===d.processId);
+        return `<div class="history-row">
+          <div>
+            <div class="h-main">${escapeHtml(d.type||'미분류')} <span class="mono" style="color:var(--red); font-weight:700;">×${d.qty}</span></div>
+            <div class="h-sub">${proc?escapeHtml(proc.name):'공정 미지정'} · ${fmtDate(d.ts)}${d.total?' · 총생산 '+d.total:''}${d.remark?' · '+escapeHtml(d.remark):''}</div>
+          </div>
+          <div class="h-actions">
+            <div class="icon-mini" data-del-defect="${d.id}" title="삭제">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+// ===================================================================
+// CSV EXPORT
+// ===================================================================
+function downloadCSV(filename, rows){
+  const BOM = '\uFEFF'; // 한글 깨짐 방지
+  const csv = BOM + rows.map(row => row.map(cell=>{
+    const s = (cell===null||cell===undefined)?'':String(cell);
+    if(/[",\n]/.test(s)) return '"'+s.replace(/"/g,'""')+'"';
+    return s;
+  }).join(',')).join('\r\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('CSV 파일이 다운로드되었습니다', 'success');
+}
+
+function exportCyclesCSV(proj, proc){
+  const cycles = getCycles(proj, proc.id);
+  const rows = [['품번', proj.pn, '품명', proj.pname, '공정', proc.name, '목표C/T(초)', proc.targetCt??'']];
+  rows.push([]);
+  rows.push(['No','측정시각','사이클타임(초)']);
+  cycles.forEach((c,i)=> rows.push([i+1, fmtDate(c.ts), c.ct]));
+  rows.push([]);
+  const r = computeRate(proj, proc.id);
+  rows.push(['평균C/T', r.avgCt, 'UPH', r.uph, 'Rate%', r.ratePct, 'Min', r.minCt, 'Max', r.maxCt, 'StdDev', r.stdCt]);
+  downloadCSV(`RunRate_${proj.pn}_${proc.name}_사이클타임_${fmtDateShort(nowISO())}.csv`, rows);
+}
+
+function exportCpkCSV(proj, proc){
+  const cd = proj.cpkData[proc.id] || {};
+  const summary = computeCpkSummary(proj, proc.id);
+  const rows = [['품번', proj.pn, '품명', proj.pname, '공정', proc.name, '측정항목', cd.itemName||'', '단위', cd.unit||'']];
+  rows.push(['USL', cd.usl??'', 'LSL', cd.lsl??'', 'Target', cd.target??'']);
+  rows.push(['입력방식', cd.mode==='raw'?'개별측정값':'통계값직접입력']);
+  rows.push([]);
+  if(cd.mode==='raw'){
+    rows.push(['No','측정값']);
+    (cd.raw||[]).forEach((v,i)=> rows.push([i+1, v]));
+    rows.push([]);
+  }
+  rows.push(['평균', summary.m??'', '표준편차', summary.sd??'', '표본수', summary.n, 'CP', summary.cp??'', 'CPK', summary.cpk??'', '판정', cpkGrade(summary.cpk).label]);
+  downloadCSV(`RunRate_${proj.pn}_${proc.name}_CPK_${fmtDateShort(nowISO())}.csv`, rows);
+}
+
+function exportDefectsCSV(proj){
+  const rows = [['품번', proj.pn, '품명', proj.pname]];
+  rows.push([]);
+  rows.push(['No','기록시각','공정','불량유형','불량수량','총생산수량','비고']);
+  proj.defects.slice().sort((a,b)=>a.ts-b.ts).forEach((d,i)=>{
+    const proc = proj.processes.find(p=>p.id===d.processId);
+    rows.push([i+1, fmtDate(d.ts), proc?proc.name:'', d.type, d.qty, d.total??'', d.remark??'']);
+  });
+  rows.push([]);
+  const ds = defectSummary(proj,null);
+  rows.push(['총불량건수', ds.totalDefect, '불량률(%)', ds.defectRate??'', 'PPM', ds.ppm??'']);
+  downloadCSV(`RunRate_${proj.pn}_불량이력_${fmtDateShort(nowISO())}.csv`, rows);
+}
+
+async function exportFullBackupJSON(){
+  toast('백업 데이터를 모으는 중...', '');
+  try{
+    const projSnap = await fb.getDocsCompat(projectsCol());
+    const fullProjects = await Promise.all(projSnap.docs.map(async (pd)=>{
+      const pid = pd.id;
+      const [procSnap, cycSnap, defSnap, cpkSnap] = await Promise.all([
+        fb.getDocsCompat(processesCol(pid)),
+        fb.getDocsCompat(cyclesCol(pid)),
+        fb.getDocsCompat(defectsCol(pid)),
+        fb.getDocsCompat(cpkCol(pid))
+      ]);
+      const cycles = {};
+      cycSnap.docs.forEach(d=>{
+        const c = d.data();
+        if(!cycles[c.processId]) cycles[c.processId]=[];
+        cycles[c.processId].push({ id:d.id, ts:c.ts, ct:c.ct });
+      });
+      const cpkData = {};
+      cpkSnap.docs.forEach(d=>{ cpkData[d.id] = d.data(); });
+      return {
+        id: pid,
+        ...pd.data(),
+        processes: procSnap.docs.map(d=>({ id:d.id, ...d.data() })),
+        cycles,
+        defects: defSnap.docs.map(d=>({ id:d.id, ...d.data() })),
+        cpkData
+      };
+    }));
+    const blob = new Blob([JSON.stringify({ projects: fullProjects }, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `RunRate_백업_${fmtDateShort(nowISO())}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast('전체 백업 파일이 다운로드되었습니다', 'success');
+  }catch(e){
+    console.error(e);
+    toast('백업 실패: ' + e.message, 'error');
+  }
+}
+
+// ===================================================================
+// EVENT HANDLERS
+// ===================================================================
+
+function openModal(id){ document.getElementById(id).style.display='flex'; }
+function closeModal(id){ document.getElementById(id).style.display='none'; }
+
+document.querySelectorAll('[data-close]').forEach(btn=>{
+  btn.addEventListener('click', ()=> closeModal(btn.dataset.close));
+});
+document.querySelectorAll('.modal-overlay').forEach(ov=>{
+  ov.addEventListener('click', e=>{ if(e.target===ov) ov.style.display='none'; });
+});
+
+// ---- New project ----
+let editingProjectId = null;
+document.getElementById('btn-new-project').addEventListener('click', ()=>openProjectModal());
+document.getElementById('btn-empty-new-project').addEventListener('click', ()=>openProjectModal());
+document.getElementById('btn-edit-project').addEventListener('click', ()=>openProjectModal(activeProject()));
+
+function openProjectModal(proj){
+  editingProjectId = proj? proj.id : null;
+  document.getElementById('modal-project-title').textContent = proj? '프로젝트 수정' : '신규 프로젝트';
+  document.getElementById('inp-pn').value = proj? proj.pn : '';
+  document.getElementById('inp-pname').value = proj? proj.pname : '';
+  document.getElementById('inp-target-uph').value = proj? (proj.targetUph??'') : '';
+  document.getElementById('inp-target-qty').value = proj? (proj.targetQty??'') : '';
+  document.getElementById('inp-remark').value = proj? (proj.remark??'') : '';
+  openModal('modal-project');
+}
+
+document.getElementById('btn-save-project').addEventListener('click', async ()=>{
+  const pn = document.getElementById('inp-pn').value.trim();
+  const pname = document.getElementById('inp-pname').value.trim();
+  if(!pn || !pname){ toast('품번과 품명은 필수입니다', 'error'); return; }
+  const targetUph = document.getElementById('inp-target-uph').value;
+  const targetQty = document.getElementById('inp-target-qty').value;
+  const remark = document.getElementById('inp-remark').value.trim();
+  const btn = document.getElementById('btn-save-project');
+  btn.disabled = true;
+
+  try{
+    if(editingProjectId){
+      await fb.updateDoc(fb.doc(fb.db, 'projects', editingProjectId), {
+        pn, pname,
+        targetUph: targetUph? Number(targetUph): null,
+        targetQty: targetQty? Number(targetQty): null,
+        remark
+      });
+      toast('프로젝트가 수정되었습니다', 'success');
+    } else {
+      const docRef = await fb.addDoc(projectsCol(), newProjectData({pn, pname, targetUph: targetUph?Number(targetUph):null, targetQty: targetQty?Number(targetQty):null, remark}));
+      state.activeProjectId = docRef.id;
+      toast('신규 프로젝트가 생성되었습니다', 'success');
+    }
+    closeModal('modal-project');
+    if(state.activeProjectId){
+      selectProject(state.activeProjectId);
+    }
+  }catch(e){
+    console.error(e);
+    toast('저장 실패: ' + e.message, 'error');
+  }finally{
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('btn-delete-project').addEventListener('click', async ()=>{
+  const proj = activeProject();
+  if(!proj) return;
+  if(!confirm(`품번 "${proj.pn}" 프로젝트를 삭제하시겠습니까?\n모든 공정/측정 데이터가 함께 삭제됩니다.`)) return;
+  try{
+    await deleteProjectDeep(proj.id);
+    state.activeProjectId = null;
+    document.getElementById('proj-view').style.display='none';
+    document.getElementById('main-empty').style.display='flex';
+    toast('프로젝트가 삭제되었습니다');
+  }catch(e){
+    console.error(e);
+    toast('삭제 실패: ' + e.message, 'error');
+  }
+});
+
+// 프로젝트 + 모든 서브컬렉션 삭제 (Firestore는 상위문서 삭제해도 서브컬렉션이 자동삭제 안 되므로 직접 순회)
+async function deleteProjectDeep(pid){
+  const batch = fb.writeBatch(fb.db);
+  const [procSnap, cycSnap, defSnap, cpkSnap] = await Promise.all([
+    fb.getDocsCompat(processesCol(pid)),
+    fb.getDocsCompat(cyclesCol(pid)),
+    fb.getDocsCompat(defectsCol(pid)),
+    fb.getDocsCompat(cpkCol(pid))
+  ]);
+  [procSnap, cycSnap, defSnap, cpkSnap].forEach(snap=>{
+    snap.docs.forEach(d=> batch.delete(d.ref));
+  });
+  batch.delete(fb.doc(fb.db, 'projects', pid));
+  await batch.commit();
+}
+
+// 공정 1개 + 그 공정에 연결된 cycles/defects/cpkData 문서 삭제
+async function deleteProcessDeep(pid, processId){
+  const batch = fb.writeBatch(fb.db);
+  const [cycSnap, defSnap] = await Promise.all([
+    fb.getDocsCompat(cyclesCol(pid)),
+    fb.getDocsCompat(defectsCol(pid))
+  ]);
+  cycSnap.docs.filter(d=> d.data().processId===processId).forEach(d=> batch.delete(d.ref));
+  defSnap.docs.filter(d=> d.data().processId===processId).forEach(d=> batch.delete(d.ref));
+  batch.delete(fb.doc(cpkCol(pid), processId));
+  batch.delete(fb.doc(processesCol(pid), processId));
+  await batch.commit();
+}
+
+// ---- Process modal (multi-row) ----
+document.getElementById('btn-add-proc-row').addEventListener('click', ()=> addProcRow());
+function addProcRow(data){
+  const list = document.getElementById('proc-input-list');
+  const idx = list.children.length + 1;
+  const row = document.createElement('div');
+  row.className = 'proc-input-row';
+  row.innerHTML = `
+    <div class="proc-order">${idx}</div>
+    <input type="text" placeholder="공정명 (예: 1차 압입)" class="proc-name-inp" value="${data?escapeHtml(data.name):''}">
+    <input type="text" placeholder="설비명 (선택)" class="proc-eq-inp" style="max-width:130px;" value="${data?escapeHtml(data.eq||''):''}">
+    <input type="number" step="any" placeholder="목표C/T(초)" class="proc-ct-inp mono" style="max-width:110px;" value="${data&&data.targetCt?data.targetCt:''}">
+    <div class="icon-mini btn-remove-row" title="삭제">&times;</div>
+  `;
+  row.querySelector('.btn-remove-row').addEventListener('click', ()=>{ row.remove(); renumberProcRows(); });
+  list.appendChild(row);
+}
+function renumberProcRows(){
+  document.querySelectorAll('#proc-input-list .proc-order').forEach((el,i)=> el.textContent = i+1);
+}
+
+function openProcessModal(){
+  const proj = activeProject();
+  const list = document.getElementById('proc-input-list');
+  list.innerHTML = '';
+  if(proj.processes.length){
+    proj.processes.slice().sort((a,b)=>a.seq-b.seq).forEach(p=> addProcRow(p));
+  } else {
+    addProcRow(); addProcRow(); addProcRow();
+  }
+  openModal('modal-process');
+}
+
+document.getElementById('btn-save-process').addEventListener('click', async ()=>{
+  const proj = activeProject();
+  if(!proj) return;
+  const rows = document.querySelectorAll('#proc-input-list .proc-input-row');
+  const names = [];
+  rows.forEach(r=>{
+    const name = r.querySelector('.proc-name-inp').value.trim();
+    if(!name) return;
+    names.push({
+      name,
+      eq: r.querySelector('.proc-eq-inp').value.trim(),
+      targetCt: r.querySelector('.proc-ct-inp').value ? Number(r.querySelector('.proc-ct-inp').value) : null
+    });
+  });
+  if(names.length===0){ toast('최소 1개 이상의 공정을 입력하세요', 'error'); return; }
+
+  const btn = document.getElementById('btn-save-process');
+  btn.disabled = true;
+  try{
+    // 기존 공정 중 이름이 같은 것은 문서ID 보존 (측정 데이터 유지 — updateDoc), 신규는 새 문서(addDoc)
+    // 목록에서 빠진 기존 공정은 공정 문서만 삭제(연결된 cycles/defects/cpkData는 남겨두고,
+    // 같은 이름으로 재등록하면 다시 매칭되도록 함 — 측정데이터 보존 우선)
+    const existing = proj.processes.slice();
+    const usedIds = new Set();
+    const batch = fb.writeBatch(fb.db);
+
+    names.forEach((n, i)=>{
+      const match = existing.find(e=> e.name===n.name && !usedIds.has(e.id));
+      if(match){
+        usedIds.add(match.id);
+        batch.update(fb.doc(processesCol(proj.id), match.id), { seq:i+1, name:n.name, eq:n.eq, targetCt:n.targetCt });
+      } else {
+        const newRef = fb.doc(processesCol(proj.id)); // 자동 ID 생성
+        batch.set(newRef, { seq:i+1, name:n.name, eq:n.eq, targetCt:n.targetCt });
+      }
+    });
+    // 목록에서 완전히 빠진 기존 공정 문서는 삭제 (측정 데이터는 processId로 남아있으나 공정삭제와 동일플로우 사용)
+    existing.filter(e=>!usedIds.has(e.id)).forEach(e=>{
+      batch.delete(fb.doc(processesCol(proj.id), e.id));
+    });
+
+    await batch.commit();
+    closeModal('modal-process');
+    toast('공정이 저장되었습니다', 'success');
+  }catch(e){
+    console.error(e);
+    toast('저장 실패: ' + e.message, 'error');
+  }finally{
+    btn.disabled = false;
+  }
+});
+
+// ---- Tabs ----
+document.getElementById('tabs').addEventListener('click', e=>{
+  const tab = e.target.closest('.tab');
+  if(tab) setTab(tab.dataset.tab);
+});
+
+// ---- Content-area dynamic events ----
+function attachContentEvents(proj){
+  // overview: jump to analysis
+  document.querySelectorAll('[data-goto-process]').forEach(el=>{
+    el.addEventListener('click', ()=>{ state.activeProcessId = el.dataset.gotoProcess; setTab('analysis'); });
+  });
+
+  const openProcBtn2 = document.getElementById('btn-open-process-modal');
+  if(openProcBtn2) openProcBtn2.addEventListener('click', openProcessModal);
+
+  document.querySelectorAll('[data-del-process]').forEach(el=>{
+    el.addEventListener('click', async e=>{
+      e.stopPropagation();
+      const id = el.dataset.delProcess;
+      if(!confirm('이 공정을 삭제하시겠습니까? 관련 측정 데이터도 함께 삭제됩니다.')) return;
+      try{
+        await deleteProcessDeep(proj.id, id);
+        toast('공정이 삭제되었습니다');
+      }catch(err){
+        console.error(err);
+        toast('삭제 실패: ' + err.message, 'error');
+      }
+    });
+  });
+
+  // analysis tab
+  document.querySelectorAll('[data-select-process]').forEach(el=>{
+    el.addEventListener('click', ()=>{ state.activeProcessId = el.dataset.selectProcess; renderContent(); });
+  });
+  const timerBtn = document.getElementById('btn-timer-toggle');
+  if(timerBtn) timerBtn.addEventListener('click', ()=> toggleTimer(proj));
+  const lapBtn = document.getElementById('btn-timer-lap');
+  if(lapBtn) lapBtn.addEventListener('click', ()=> recordLap(proj));
+  const manualAddBtn = document.getElementById('btn-manual-ct-add');
+  if(manualAddBtn) manualAddBtn.addEventListener('click', ()=>{
+    const val = Number(document.getElementById('manual-ct-input').value);
+    if(!val || val<=0){ toast('유효한 사이클타임을 입력하세요', 'error'); return; }
+    addCycle(proj.id, state.activeProcessId, val);
+    document.getElementById('manual-ct-input').value = '';
+  });
+  const manualInput = document.getElementById('manual-ct-input');
+  if(manualInput) manualInput.addEventListener('keydown', e=>{ if(e.key==='Enter') manualAddBtn.click(); });
+  document.querySelectorAll('[data-del-cycle]').forEach(el=>{
+    el.addEventListener('click', async ()=>{
+      const id = el.dataset.delCycle;
+      try{
+        await fb.deleteDoc(fb.doc(cyclesCol(proj.id), id));
+      }catch(e){ toast('삭제 실패: '+e.message, 'error'); }
+    });
+  });
+  const expCyclesBtn = document.getElementById('btn-export-cycles');
+  if(expCyclesBtn) expCyclesBtn.addEventListener('click', ()=>{
+    const proc = proj.processes.find(p=>p.id===state.activeProcessId);
+    exportCyclesCSV(proj, proc);
+  });
+
+  // cpk tab
+  document.querySelectorAll('[data-select-cpk-process]').forEach(el=>{
+    el.addEventListener('click', ()=>{ state.cpkProcessId = el.dataset.selectCpkProcess; renderContent(); });
+  });
+  document.querySelectorAll('[data-cpk-mode]').forEach(el=>{
+    el.addEventListener('click', async ()=>{
+      state.cpkInputMode = el.dataset.cpkMode;
+      try{
+        await fb.setDoc(fb.doc(cpkCol(proj.id), state.cpkProcessId), { mode: state.cpkInputMode }, { merge: true });
+      }catch(e){ toast('저장 실패: '+e.message, 'error'); }
+      renderContent();
+    });
+  });
+  const saveSpecBtn = document.getElementById('btn-save-spec');
+  if(saveSpecBtn) saveSpecBtn.addEventListener('click', async ()=>{
+    const itemName = document.getElementById('cpk-item-name').value.trim();
+    const unit = document.getElementById('cpk-unit').value.trim();
+    const t = document.getElementById('cpk-target').value;
+    const u = document.getElementById('cpk-usl').value;
+    const l = document.getElementById('cpk-lsl').value;
+    try{
+      await fb.setDoc(fb.doc(cpkCol(proj.id), state.cpkProcessId), {
+        itemName, unit,
+        target: t===''? null : Number(t),
+        usl: u===''? null : Number(u),
+        lsl: l===''? null : Number(l),
+        mode: state.cpkInputMode
+      }, { merge: true });
+      toast('규격이 저장되었습니다', 'success');
+    }catch(e){ toast('저장 실패: '+e.message, 'error'); }
+  });
+  const addBulkBtn = document.getElementById('btn-add-bulk-raw');
+  if(addBulkBtn) addBulkBtn.addEventListener('click', async ()=>{
+    const txt = document.getElementById('cpk-raw-bulk').value;
+    const vals = txt.split(/[,\n\s]+/).map(s=>s.trim()).filter(Boolean).map(Number).filter(v=>!isNaN(v));
+    if(vals.length===0){ toast('유효한 측정값이 없습니다', 'error'); return; }
+    try{
+      // arrayUnion으로 원자적 추가 — 기존 배열을 읽어서 통째로 다시쓰지 않으므로 덮어쓰기 위험 없음
+      await fb.setDoc(fb.doc(cpkCol(proj.id), state.cpkProcessId), {
+        raw: fb.arrayUnion(...vals),
+        mode: state.cpkInputMode
+      }, { merge: true });
+      document.getElementById('cpk-raw-bulk').value = '';
+      toast(`${vals.length}개 측정값이 추가되었습니다`, 'success');
+    }catch(e){ toast('추가 실패: '+e.message, 'error'); }
+  });
+  document.querySelectorAll('[data-del-raw]').forEach(el=>{
+    el.addEventListener('click', async ()=>{
+      const idx = Number(el.dataset.delRaw);
+      const cd = proj.cpkData[state.cpkProcessId];
+      const val = cd.raw[idx];
+      try{
+        // 동일 값이 여러개면 arrayRemove가 전부 지울 수 있어, 배열 전체를 새로 구성해 setDoc(merge)으로 안전 교체
+        const newRaw = cd.raw.slice(); newRaw.splice(idx,1);
+        await fb.setDoc(fb.doc(cpkCol(proj.id), state.cpkProcessId), { raw: newRaw }, { merge: true });
+      }catch(e){ toast('삭제 실패: '+e.message, 'error'); }
+    });
+  });
+  const saveStatsBtn = document.getElementById('btn-save-stats');
+  if(saveStatsBtn) saveStatsBtn.addEventListener('click', async ()=>{
+    try{
+      await fb.setDoc(fb.doc(cpkCol(proj.id), state.cpkProcessId), {
+        statsMean: document.getElementById('cpk-stats-mean').value || null,
+        statsSd: document.getElementById('cpk-stats-sd').value || null,
+        statsN: document.getElementById('cpk-stats-n').value || null,
+        mode: state.cpkInputMode
+      }, { merge: true });
+      toast('통계값이 저장되었습니다', 'success');
+    }catch(e){ toast('저장 실패: '+e.message, 'error'); }
+  });
+  const expCpkBtn = document.getElementById('btn-export-cpk');
+  if(expCpkBtn) expCpkBtn.addEventListener('click', ()=>{
+    const proc = proj.processes.find(p=>p.id===state.cpkProcessId);
+    exportCpkCSV(proj, proc);
+  });
+
+  // history tab
+  const openDefectBtn = document.getElementById('btn-open-defect-modal');
+  if(openDefectBtn) openDefectBtn.addEventListener('click', ()=>{
+    const sel = document.getElementById('defect-proc');
+    sel.innerHTML = proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+    document.getElementById('defect-type').value='';
+    document.getElementById('defect-qty').value=1;
+    document.getElementById('defect-total').value='';
+    document.getElementById('defect-remark').value='';
+    openModal('modal-defect');
+  });
+  document.querySelectorAll('[data-del-defect]').forEach(el=>{
+    el.addEventListener('click', async ()=>{
+      const id = el.dataset.delDefect;
+      try{
+        await fb.deleteDoc(fb.doc(defectsCol(proj.id), id));
+      }catch(e){ toast('삭제 실패: '+e.message, 'error'); }
+    });
+  });
+  const expDefBtn = document.getElementById('btn-export-defects');
+  if(expDefBtn) expDefBtn.addEventListener('click', ()=> exportDefectsCSV(proj));
+}
+
+// 타이머 작동 중 사이클 추가/삭제 시 호출 — 분석탭 KPI와 기록테이블만 갱신, 타이머 DOM은 건드리지 않음
+function refreshCycleTableOnly(proj){
+  if(state.activeTab !== 'analysis') return;
+  if(!state.activeProcessId) return;
+  const proc = proj.processes.find(p=>p.id===state.activeProcessId);
+  if(!proc) return;
+  const r = computeRate(proj, proc.id);
+  const cycles = getCycles(proj, proc.id).slice().reverse();
+  const rateClass = r.ratePct===null?'':r.ratePct>=100?'good':r.ratePct>=90?'warn':'bad';
+
+  const kpiStrip = document.getElementById('analysis-kpi-strip');
+  if(kpiStrip){
+    kpiStrip.innerHTML = `
+    <div class="kpi-card">
+      <div class="kpi-label">평균 사이클타임</div>
+      <div class="kpi-value">${r.avgCt!==null?r.avgCt:'—'}<span class="kpi-unit">초</span></div>
+      <div class="kpi-sub">Min ${r.minCt??'—'} / Max ${r.maxCt??'—'} / σ ${r.stdCt??'—'}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">UPH (시간당 생산량)</div>
+      <div class="kpi-value">${r.uph!==null?r.uph:'—'}<span class="kpi-unit">EA/h</span></div>
+      <div class="kpi-sub">목표 C/T ${proc.targetCt? proc.targetCt+'초' : '미설정'}</div>
+    </div>
+    <div class="kpi-card ${rateClass!==''?'status-'+rateClass:''}">
+      <div class="kpi-label">Rate %</div>
+      <div class="kpi-value ${rateClass}">${r.ratePct!==null?r.ratePct:'—'}<span class="kpi-unit">%</span></div>
+      <div class="kpi-sub">목표C/T ÷ 실측Avg C/T</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">측정 횟수</div>
+      <div class="kpi-value">${r.n}<span class="kpi-unit">건</span></div>
+      <div class="kpi-sub">${cycles.length>0? '최근 '+fmtDate(cycles[0].ts) : '측정 없음'}</div>
+    </div>`;
+  }
+
+  const recordPanel = document.getElementById('cycle-record-panel');
+  if(recordPanel){
+    const tag = recordPanel.querySelector('.ph-tag');
+    if(tag) tag.textContent = cycles.length + '건';
+    const body = recordPanel.querySelector('.panel-body');
+    if(body){
+      body.innerHTML = cycles.length===0? `<div class="mini-empty"><div class="ico">⏱</div><p>측정된 사이클타임이 없습니다.</p></div>` : `
+      <table class="data-table">
+        <thead><tr><th>#</th><th>측정시각</th><th>사이클타임(초)</th><th></th></tr></thead>
+        <tbody>
+        ${cycles.map((c,i)=>`<tr><td>${cycles.length-i}</td><td>${fmtDate(c.ts)}</td><td>${c.ct.toFixed(2)}</td><td class="del-cell" data-del-cycle="${c.id}">삭제</td></tr>`).join('')}
+        </tbody>
+      </table>`;
+      // 새로 그려진 삭제버튼에 이벤트 다시 바인딩
+      body.querySelectorAll('[data-del-cycle]').forEach(el=>{
+        el.addEventListener('click', async ()=>{
+          try{ await fb.deleteDoc(fb.doc(cyclesCol(proj.id), el.dataset.delCycle)); }
+          catch(e){ toast('삭제 실패: '+e.message, 'error'); }
+        });
+      });
+    }
+  }
+}
+
+async function addCycle(pid, processId, ct){
+  try{
+    await fb.addDoc(cyclesCol(pid), { processId, ts: Date.now(), ct: round(ct,2) });
+  }catch(e){
+    console.error(e);
+    toast('측정 기록 저장 실패: ' + e.message, 'error');
+  }
+}
+
+// ---- Timer ----
+function toggleTimer(proj){
+  const btn = document.getElementById('btn-timer-toggle');
+  const lapBtn = document.getElementById('btn-timer-lap');
+  const display = document.getElementById('timer-display');
+  if(!state.timer.running){
+    state.timer.running = true;
+    state.timer.startTs = Date.now();
+    display.classList.add('running');
+    btn.textContent = '측정 중지';
+    lapBtn.disabled = false;
+    state.timer.intervalId = setInterval(()=>{
+      const elapsed = (Date.now() - state.timer.startTs)/1000;
+      const d = document.getElementById('timer-display');
+      if(d) d.textContent = elapsed.toFixed(1);
+    }, 100);
+    document.addEventListener('keydown', timerEnterHandler);
+  } else {
+    state.timer.running = false;
+    clearInterval(state.timer.intervalId);
+    if(display){ display.classList.remove('running'); display.textContent = '00.0'; }
+    btn.textContent = '측정 시작';
+    lapBtn.disabled = true;
+    document.removeEventListener('keydown', timerEnterHandler);
+  }
+}
+function timerEnterHandler(e){
+  if(e.key==='Enter' && state.timer.running){
+    const proj = activeProject();
+    if(proj) recordLap(proj);
+  }
+}
+function recordLap(proj){
+  if(!state.timer.running) return;
+  const elapsed = (Date.now() - state.timer.startTs)/1000;
+  addCycle(proj.id, state.activeProcessId, elapsed);
+  state.timer.startTs = Date.now(); // lap reset
+  // 측정기록 갱신은 Firestore 리스너가 처리. 타이머 표시 상태(러닝중)는 그대로 유지.
+}
+
+// ---- Defect save ----
+document.getElementById('btn-save-defect').addEventListener('click', async ()=>{
+  const proj = activeProject();
+  const processId = document.getElementById('defect-proc').value;
+  const type = document.getElementById('defect-type').value.trim();
+  const qty = Number(document.getElementById('defect-qty').value);
+  const total = document.getElementById('defect-total').value;
+  const remark = document.getElementById('defect-remark').value.trim();
+  if(!processId || !qty || qty<=0){ toast('공정과 불량 수량을 확인하세요', 'error'); return; }
+  try{
+    await fb.addDoc(defectsCol(proj.id), { ts: Date.now(), processId, type: type||'미분류', qty, total: total?Number(total):null, remark });
+    closeModal('modal-defect');
+    toast('불량 기록이 저장되었습니다', 'success');
+  }catch(e){
+    toast('저장 실패: ' + e.message, 'error');
+  }
+});
+
+// ---- Sidebar collapse ----
+document.getElementById('btn-toggle-sidebar').addEventListener('click', ()=>{
+  document.getElementById('sidebar').classList.toggle('collapsed');
+});
+
+// ---- Backup export/import ----
+document.getElementById('btn-export-all').addEventListener('click', exportFullBackupJSON);
+document.getElementById('btn-import-all').addEventListener('click', ()=>{
+  const inp = document.createElement('input');
+  inp.type='file'; inp.accept='application/json';
+  inp.addEventListener('change', e=>{
+    const file = e.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = async ev=>{
+      try{
+        const data = JSON.parse(ev.target.result);
+        if(!data.projects) throw new Error('invalid format');
+        if(!confirm(`백업 파일의 프로젝트 ${data.projects.length}개로 현재 Firestore 데이터를 모두 교체합니다.\n현재 저장된 모든 프로젝트가 삭제된 후 백업 내용으로 다시 채워집니다.\n계속하시겠습니까?`)) return;
+        toast('데이터를 불러오는 중...', '');
+        await restoreFromBackup(data);
+        state.activeProjectId = null;
+        document.getElementById('proj-view').style.display='none';
+        document.getElementById('main-empty').style.display='flex';
+        toast('백업 데이터를 불러왔습니다', 'success');
+      }catch(err){
+        console.error(err);
+        toast('백업 파일 형식이 올바르지 않거나 복원에 실패했습니다', 'error');
+      }
+    };
+    reader.readAsText(file);
+  });
+  inp.click();
+});
+
+// 백업 JSON으로 전체 교체: 기존 프로젝트 전부 삭제 후 백업 내용을 새 문서로 기록
+async function restoreFromBackup(data){
+  const existingSnap = await fb.getDocsCompat(projectsCol());
+  for(const pd of existingSnap.docs){
+    await deleteProjectDeep(pd.id);
+  }
+  for(const proj of data.projects){
+    const batch = fb.writeBatch(fb.db);
+    const newProjRef = fb.doc(projectsCol());
+    batch.set(newProjRef, {
+      pn: proj.pn, pname: proj.pname,
+      targetUph: proj.targetUph ?? null, targetQty: proj.targetQty ?? null,
+      remark: proj.remark || '', createdAt: proj.createdAt || nowISO()
+    });
+    (proj.processes||[]).forEach(p=>{
+      const ref = fb.doc(processesCol(newProjRef.id));
+      batch.set(ref, { seq:p.seq, name:p.name, eq:p.eq||'', targetCt:p.targetCt??null });
+      // 사이클/CPK는 공정 문서ID가 바뀌므로 별도 루프에서 매핑 필요 → 아래에서 처리
+      p.__newId = ref.id;
+    });
+    await batch.commit();
+
+    // 공정별 cycles/defects/cpkData는 새 공정ID로 매핑하여 별도 배치 처리(배치 1개당 최대 500건 제한 고려해 묶음 처리)
+    const procIdMap = {};
+    (proj.processes||[]).forEach(p=>{ procIdMap[p.id] = p.__newId; });
+
+    const cycleEntries = [];
+    Object.entries(proj.cycles||{}).forEach(([oldProcId, list])=>{
+      const newProcId = procIdMap[oldProcId];
+      if(!newProcId) return;
+      list.forEach(c=> cycleEntries.push({ processId:newProcId, ts:c.ts, ct:c.ct }));
+    });
+    await commitInChunks(cyclesCol(newProjRef.id), cycleEntries);
+
+    const defectEntries = (proj.defects||[]).map(d=>({
+      processId: procIdMap[d.processId] || null,
+      ts: d.ts, type: d.type, qty: d.qty, total: d.total ?? null, remark: d.remark || ''
+    })).filter(d=>d.processId);
+    await commitInChunks(defectsCol(newProjRef.id), defectEntries);
+
+    const cpkBatch = fb.writeBatch(fb.db);
+    Object.entries(proj.cpkData||{}).forEach(([oldProcId, cd])=>{
+      const newProcId = procIdMap[oldProcId];
+      if(!newProcId) return;
+      cpkBatch.set(fb.doc(cpkCol(newProjRef.id), newProcId), cd);
+    });
+    await cpkBatch.commit();
+  }
+}
+
+// addDoc 다건을 배치로 안전하게 적재 (배치 최대 500건 제한 대응)
+async function commitInChunks(colRef, entries, chunkSize=400){
+  for(let i=0;i<entries.length;i+=chunkSize){
+    const batch = fb.writeBatch(fb.db);
+    entries.slice(i,i+chunkSize).forEach(entry=>{
+      batch.set(fb.doc(colRef), entry);
+    });
+    await batch.commit();
+  }
+}
+
+document.getElementById('btn-clear-all').addEventListener('click', async ()=>{
+  if(!confirm('모든 프로젝트와 측정 데이터를 초기화하시겠습니까?\n이 작업은 되돌릴 수 없습니다. 사전에 백업(JSON) 내보내기를 권장합니다.')) return;
+  if(!confirm('정말로 진행하시겠습니까? Firestore에 저장된 모든 데이터가 영구적으로 삭제됩니다.')) return;
+  try{
+    toast('전체 데이터를 삭제하는 중...', '');
+    const snap = await fb.getDocsCompat(projectsCol());
+    for(const pd of snap.docs){
+      await deleteProjectDeep(pd.id);
+    }
+    state.activeProjectId = null;
+    document.getElementById('proj-view').style.display='none';
+    document.getElementById('main-empty').style.display='flex';
+    toast('전체 데이터가 초기화되었습니다');
+  }catch(e){
+    console.error(e);
+    toast('초기화 실패: ' + e.message, 'error');
+  }
+});
+
+// ===================================================================
+// INIT
+// ===================================================================
+function init(){
+  fb = window.__firebase;
+  if(!fb){
+    toast('Firebase 초기화 실패: 네트워크 또는 설정을 확인하세요', 'error');
+    return;
+  }
+  subscribeProjects();
+}
+
+if(window.__firebase){
+  init();
+} else {
+  window.addEventListener('firebase-ready', init, { once:true });
+}
+
+// register service worker for PWA (best-effort; ignored if unsupported/blocked)
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('sw.js').catch(()=>{});
+  });
+}

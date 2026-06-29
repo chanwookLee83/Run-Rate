@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>RUN & RATE — 양산 초기 검증</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1A2B42">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root{
+  --ink: #1A2B42;
+  --ink-soft: #3D4F68;
+  --paper: #FAFAF8;
+  --panel: #FFFFFF;
+  --line: #E4E1D8;
+  --line-strong: #C9C5B8;
+  --gauge-grey: #6B7280;
+  --amber: #E8A33D;
+  --amber-soft: #FBF0DC;
+  --green: #2D8659;
+  --green-soft: #E5F3EB;
+  --red: #C2410C;
+  --red-soft: #FBE9E2;
+  --blue-data: #2B5C8A;
+  --shadow-sm: 0 1px 2px rgba(26,43,66,0.06);
+  --shadow-md: 0 4px 16px rgba(26,43,66,0.08);
+  --radius: 6px;
+}
+
+*{box-sizing:border-box; margin:0; padding:0;}
+html,body{height:100%;}
+body{
+  font-family:'Inter', -apple-system, sans-serif;
+  background:var(--paper);
+  color:var(--ink);
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+.mono{font-family:'JetBrains Mono', monospace;}
+.display{font-family:'Barlow Condensed', sans-serif; font-weight:700; letter-spacing:0.02em;}
+
+/* ===== APP SHELL ===== */
+#app{display:flex; height:100vh; width:100vw;}
+
+/* ===== TOP BAR ===== */
+#topbar{
+  position:fixed; top:0; left:0; right:0; height:56px;
+  background:var(--ink); color:#fff;
+  display:flex; align-items:center; padding:0 18px;
+  z-index:100; gap:14px;
+}
+#topbar .brand{
+  font-family:'Barlow Condensed', sans-serif;
+  font-weight:800; font-size:20px; letter-spacing:0.04em;
+  display:flex; align-items:center; gap:8px;
+}
+#topbar .brand .tick{
+  width:8px; height:8px; background:var(--amber); border-radius:50%;
+  box-shadow:0 0 0 3px rgba(232,163,61,0.25);
+}
+#topbar .sub{
+  font-size:11px; color:#9FB0C4; letter-spacing:0.06em; text-transform:uppercase;
+  border-left:1px solid #3D4F68; padding-left:14px; margin-left:2px;
+}
+#topbar .spacer{flex:1;}
+#topbar .proj-pill{
+  font-size:12px; background:#24344C; padding:6px 12px; border-radius:20px;
+  display:flex; align-items:center; gap:8px; cursor:pointer; transition:background .15s;
+}
+#topbar .proj-pill:hover{background:#2D3F59;}
+#topbar .proj-pill .dot{width:6px;height:6px;border-radius:50%; background:var(--green);}
+#topbar button.icon-btn{
+  background:transparent; border:1px solid #3D4F68; color:#CBD5E1;
+  width:34px; height:34px; border-radius:6px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; transition:all .15s;
+}
+#topbar button.icon-btn:hover{background:#24344C; color:#fff;}
+
+/* ===== SIDEBAR ===== */
+#sidebar{
+  width:280px; min-width:280px; height:100vh; padding-top:56px;
+  background:var(--panel); border-right:1px solid var(--line);
+  display:flex; flex-direction:column;
+  transition:margin-left .2s ease;
+}
+#sidebar.collapsed{margin-left:-280px;}
+.sb-header{
+  padding:16px 16px 10px; display:flex; justify-content:space-between; align-items:center;
+}
+.sb-header span{font-size:11px; font-weight:700; letter-spacing:0.08em; color:var(--gauge-grey); text-transform:uppercase;}
+.btn-new-proj{
+  background:var(--ink); color:#fff; border:none; border-radius:6px;
+  font-size:12px; font-weight:600; padding:6px 10px; cursor:pointer; display:flex; align-items:center; gap:5px;
+  transition:background .15s;
+}
+.btn-new-proj:hover{background:var(--ink-soft);}
+#proj-list{flex:1; overflow-y:auto; padding:4px 10px 10px;}
+.proj-item{
+  padding:10px 12px; border-radius:8px; cursor:pointer; margin-bottom:3px;
+  border:1px solid transparent; transition:all .12s;
+}
+.proj-item:hover{background:#F4F2EC;}
+.proj-item.active{background:var(--ink); border-color:var(--ink);}
+.proj-item.active .pn{color:#fff;}
+.proj-item.active .pname{color:#C9D4E2;}
+.proj-item.active .pmeta{color:#8DA0B8;}
+.proj-item .pn{font-family:'JetBrains Mono'; font-size:13px; font-weight:700; color:var(--ink);}
+.proj-item .pname{font-size:12px; color:var(--ink-soft); margin-top:2px;}
+.proj-item .pmeta{font-size:10.5px; color:var(--gauge-grey); margin-top:4px; display:flex; gap:8px; align-items:center;}
+.proj-item .pmeta .chip{
+  padding:1px 6px; border-radius:10px; font-weight:700; font-size:9.5px; letter-spacing:0.03em;
+}
+.chip-green{background:var(--green-soft); color:var(--green);}
+.chip-amber{background:var(--amber-soft); color:#9A6B1F;}
+.chip-red{background:var(--red-soft); color:var(--red);}
+.proj-item.active .chip-green{background:rgba(45,134,89,0.25); color:#A7E0C0;}
+.proj-item.active .chip-amber{background:rgba(232,163,61,0.25); color:#F5D7A0;}
+.proj-item.active .chip-red{background:rgba(194,65,12,0.25); color:#F0B49C;}
+
+.sb-empty{padding:30px 20px; text-align:center; color:var(--gauge-grey); font-size:12.5px; line-height:1.6;}
+
+#sidebar-footer{
+  border-top:1px solid var(--line); padding:12px 16px; display:flex; flex-direction:column; gap:6px;
+}
+.sb-foot-btn{
+  font-size:11.5px; color:var(--ink-soft); background:transparent; border:none; text-align:left;
+  cursor:pointer; padding:6px 4px; display:flex; align-items:center; gap:7px; border-radius:5px; transition:background .12s;
+}
+.sb-foot-btn:hover{background:#F4F2EC;}
+
+/* ===== MAIN ===== */
+#main{flex:1; height:100vh; padding-top:56px; display:flex; flex-direction:column; overflow:hidden; min-width:0;}
+
+#main-empty{
+  flex:1; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px; color:var(--gauge-grey);
+}
+#main-empty .ico{width:64px; height:64px; opacity:0.35;}
+#main-empty h2{font-family:'Barlow Condensed'; font-weight:700; font-size:22px; color:var(--ink-soft);}
+#main-empty p{font-size:13px; max-width:320px; text-align:center; line-height:1.6;}
+
+#proj-header{
+  padding:18px 28px 0; border-bottom:1px solid var(--line); background:var(--panel);
+}
+.ph-top{display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:14px;}
+.ph-title-row{display:flex; align-items:center; gap:12px;}
+.ph-title-row .pn-badge{
+  font-family:'JetBrains Mono'; font-weight:700; font-size:14px; background:var(--ink); color:#fff;
+  padding:4px 10px; border-radius:5px; letter-spacing:0.02em;
+}
+.ph-title-row h1{font-family:'Barlow Condensed'; font-weight:700; font-size:24px; color:var(--ink);}
+.ph-title-row .ph-part{font-size:12px; color:var(--gauge-grey); margin-top:3px;}
+.ph-actions{display:flex; gap:8px;}
+.btn{
+  border:1px solid var(--line-strong); background:#fff; color:var(--ink);
+  padding:8px 14px; border-radius:6px; font-size:12.5px; font-weight:600; cursor:pointer;
+  display:flex; align-items:center; gap:6px; transition:all .12s;
+}
+.btn:hover{border-color:var(--ink); background:#F8F7F3;}
+.btn-primary{background:var(--ink); border-color:var(--ink); color:#fff;}
+.btn-primary:hover{background:var(--ink-soft); border-color:var(--ink-soft);}
+.btn-danger-ghost{color:var(--red); border-color:var(--red-soft);}
+.btn-danger-ghost:hover{background:var(--red-soft); border-color:var(--red);}
+.btn-sm{padding:5px 10px; font-size:11.5px;}
+
+.tabs{display:flex; gap:2px; margin-top:4px;}
+.tab{
+  padding:10px 16px; font-size:13px; font-weight:600; color:var(--gauge-grey);
+  border-bottom:3px solid transparent; cursor:pointer; transition:all .12s; display:flex; align-items:center; gap:6px;
+}
+.tab:hover{color:var(--ink-soft);}
+.tab.active{color:var(--ink); border-bottom-color:var(--amber);}
+.tab .badge{
+  background:#EDEAE0; color:var(--gauge-grey); font-size:10px; font-weight:700; padding:1px 6px; border-radius:10px;
+}
+.tab.active .badge{background:var(--amber-soft); color:#9A6B1F;}
+
+#content{flex:1; overflow-y:auto; padding:22px 28px 40px;}
+
+/* ===== KPI STRIP ===== */
+.kpi-strip{display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:22px;}
+.kpi-card{
+  background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px 16px;
+  position:relative; overflow:hidden;
+}
+.kpi-card .kpi-label{font-size:10.5px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:var(--gauge-grey);}
+.kpi-card .kpi-value{font-family:'JetBrains Mono'; font-size:26px; font-weight:700; color:var(--ink); margin-top:4px; display:flex; align-items:baseline; gap:4px;}
+.kpi-card .kpi-unit{font-size:13px; font-weight:500; color:var(--gauge-grey);}
+.kpi-card .kpi-sub{font-size:11px; color:var(--gauge-grey); margin-top:4px;}
+.kpi-card.status-good{border-left:3px solid var(--green);}
+.kpi-card.status-warn{border-left:3px solid var(--amber);}
+.kpi-card.status-bad{border-left:3px solid var(--red);}
+.kpi-card .kpi-value.good{color:var(--green);}
+.kpi-card .kpi-value.warn{color:#9A6B1F;}
+.kpi-card .kpi-value.bad{color:var(--red);}
+
+/* ===== PANEL ===== */
+.panel{background:var(--panel); border:1px solid var(--line); border-radius:10px; margin-bottom:20px; overflow:hidden;}
+.panel-head{
+  padding:14px 18px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;
+  background:#FCFBF8;
+}
+.panel-head h3{font-family:'Barlow Condensed'; font-size:16px; font-weight:700; color:var(--ink); display:flex; align-items:center; gap:8px;}
+.panel-head .ph-tag{font-size:10.5px; font-weight:700; color:var(--gauge-grey); background:#EDEAE0; padding:2px 8px; border-radius:10px; letter-spacing:0.03em;}
+.panel-body{padding:18px;}
+
+/* ===== PROCESS LIST (tree under proj) ===== */
+.process-row{
+  display:grid; grid-template-columns:28px 1fr 100px 100px 110px 90px 40px;
+  align-items:center; gap:10px; padding:11px 14px; border-bottom:1px solid var(--line);
+  font-size:12.5px; cursor:pointer; transition:background .12s;
+}
+.process-row:last-child{border-bottom:none;}
+.process-row:hover{background:#FAF9F5;}
+.process-row .proc-num{
+  font-family:'JetBrains Mono'; font-weight:700; font-size:11px; color:#fff; background:var(--gauge-grey);
+  width:24px; height:24px; border-radius:5px; display:flex; align-items:center; justify-content:center;
+}
+.process-row .proc-name{font-weight:600; color:var(--ink);}
+.process-row .proc-name .proc-eq{font-weight:400; color:var(--gauge-grey); font-size:11px; display:block; margin-top:1px;}
+.process-row .mono{font-size:12px;}
+.process-row .rate-pill{
+  font-weight:700; padding:3px 8px; border-radius:5px; text-align:center; font-family:'JetBrains Mono'; font-size:12px;
+}
+.process-row .row-actions{display:flex; gap:4px; opacity:0; transition:opacity .12s;}
+.process-row:hover .row-actions{opacity:1;}
+.icon-mini{
+  width:24px; height:24px; border-radius:4px; border:1px solid var(--line-strong); background:#fff;
+  display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--gauge-grey);
+}
+.icon-mini:hover{border-color:var(--ink); color:var(--ink);}
+
+.col-headers{
+  display:grid; grid-template-columns:28px 1fr 100px 100px 110px 90px 40px;
+  gap:10px; padding:0 14px 8px; font-size:10px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; color:var(--gauge-grey);
+}
+
+/* ===== FORM ELEMENTS ===== */
+.form-grid{display:grid; grid-template-columns:repeat(2,1fr); gap:14px;}
+.form-grid.cols-3{grid-template-columns:repeat(3,1fr);}
+.field{display:flex; flex-direction:column; gap:5px;}
+.field label{font-size:11.5px; font-weight:600; color:var(--ink-soft);}
+.field label .req{color:var(--red);}
+.field input, .field select, .field textarea{
+  border:1px solid var(--line-strong); border-radius:6px; padding:9px 11px; font-size:13px;
+  font-family:'Inter', sans-serif; background:#fff; color:var(--ink); transition:border-color .12s;
+}
+.field input:focus, .field select:focus, .field textarea:focus{
+  outline:none; border-color:var(--ink); box-shadow:0 0 0 3px rgba(26,43,66,0.08);
+}
+.field .hint{font-size:10.5px; color:var(--gauge-grey);}
+.field input.mono, .field textarea.mono{font-family:'JetBrains Mono';}
+
+/* ===== MODAL ===== */
+.modal-overlay{
+  position:fixed; inset:0; background:rgba(26,43,66,0.45); z-index:1000;
+  display:flex; align-items:center; justify-content:center; backdrop-filter:blur(2px);
+}
+.modal{
+  background:#fff; border-radius:12px; width:560px; max-width:92vw; max-height:88vh; overflow-y:auto;
+  box-shadow:0 20px 60px rgba(26,43,66,0.3);
+}
+.modal.modal-wide{width:760px;}
+.modal-head{
+  padding:18px 22px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;
+  position:sticky; top:0; background:#fff; z-index:5;
+}
+.modal-head h2{font-family:'Barlow Condensed'; font-size:19px; font-weight:700;}
+.modal-close{
+  width:30px; height:30px; border-radius:50%; border:none; background:#F2F0E9; color:var(--gauge-grey);
+  cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:16px; transition:all .12s;
+}
+.modal-close:hover{background:#E4E1D8; color:var(--ink);}
+.modal-body{padding:22px;}
+.modal-foot{padding:16px 22px; border-top:1px solid var(--line); display:flex; justify-content:flex-end; gap:10px;}
+
+.proc-input-list{display:flex; flex-direction:column; gap:10px;}
+.proc-input-row{display:flex; gap:8px; align-items:center;}
+.proc-input-row input{flex:1;}
+.proc-input-row .drag-handle{color:var(--line-strong); cursor:grab; font-size:14px;}
+.proc-input-row .proc-order{
+  width:26px; height:26px; border-radius:5px; background:#F2F0E9; color:var(--gauge-grey);
+  display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono'; font-size:11px; font-weight:700; flex-shrink:0;
+}
+.add-row-btn{
+  border:1.5px dashed var(--line-strong); background:transparent; color:var(--gauge-grey);
+  padding:9px; border-radius:6px; font-size:12.5px; font-weight:600; cursor:pointer; transition:all .12s;
+}
+.add-row-btn:hover{border-color:var(--ink); color:var(--ink);}
+
+/* ===== ANALYSIS TAB ===== */
+.analysis-toolbar{display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;}
+.proc-selector{display:flex; gap:6px; flex-wrap:wrap;}
+.proc-chip{
+  padding:7px 13px; border-radius:18px; font-size:12px; font-weight:600; cursor:pointer;
+  border:1px solid var(--line-strong); background:#fff; color:var(--ink-soft); transition:all .12s;
+}
+.proc-chip:hover{border-color:var(--ink);}
+.proc-chip.active{background:var(--ink); border-color:var(--ink); color:#fff;}
+
+.cycle-input-panel{display:flex; gap:10px; align-items:flex-end; margin-bottom:14px; flex-wrap:wrap;}
+.cycle-input-panel .field{flex:1; min-width:120px;}
+.timer-display{
+  font-family:'JetBrains Mono'; font-size:36px; font-weight:700; color:var(--ink); min-width:140px; text-align:center;
+  background:#F4F2EC; border-radius:8px; padding:10px; border:1px solid var(--line);
+}
+.timer-display.running{color:var(--blue-data); background:#EAF1F8; border-color:#BFD6EA;}
+
+table.data-table{width:100%; border-collapse:collapse; font-size:12.5px;}
+table.data-table th{
+  text-align:left; padding:8px 10px; font-size:10.5px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase;
+  color:var(--gauge-grey); border-bottom:2px solid var(--line);
+}
+table.data-table td{padding:9px 10px; border-bottom:1px solid var(--line); font-family:'JetBrains Mono'; color:var(--ink);}
+table.data-table tr:hover td{background:#FAF9F5;}
+table.data-table td.spec-out{color:var(--red); font-weight:700;}
+table.data-table .del-cell{cursor:pointer; color:var(--gauge-grey); text-align:center; font-family:'Inter';}
+table.data-table .del-cell:hover{color:var(--red);}
+
+/* ===== CPK CARD ===== */
+.cpk-layout{display:grid; grid-template-columns:280px 1fr; gap:20px;}
+.cpk-gauge-box{
+  background:#fff; border:1px solid var(--line); border-radius:10px; padding:18px; text-align:center;
+}
+.cpk-big{font-family:'JetBrains Mono'; font-size:48px; font-weight:700; line-height:1;}
+.cpk-big.good{color:var(--green);}
+.cpk-big.warn{color:#9A6B1F;}
+.cpk-big.bad{color:var(--red);}
+.cpk-grade{
+  display:inline-block; margin-top:8px; padding:3px 12px; border-radius:14px; font-size:11.5px; font-weight:700; letter-spacing:0.03em;
+}
+.cpk-stats{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:16px;}
+.cpk-stat{text-align:left;}
+.cpk-stat .lbl{font-size:10px; color:var(--gauge-grey); text-transform:uppercase; letter-spacing:0.04em;}
+.cpk-stat .val{font-family:'JetBrains Mono'; font-size:15px; font-weight:700; color:var(--ink);}
+
+.input-mode-toggle{display:flex; background:#F2F0E9; border-radius:7px; padding:3px; gap:2px; width:fit-content; margin-bottom:14px;}
+.imt-btn{padding:7px 16px; border-radius:5px; font-size:12px; font-weight:600; color:var(--gauge-grey); cursor:pointer; border:none; background:transparent; transition:all .12s;}
+.imt-btn.active{background:#fff; color:var(--ink); box-shadow:var(--shadow-sm);}
+
+.measure-grid{display:grid; grid-template-columns:repeat(6,1fr); gap:8px; margin-bottom:14px;}
+.measure-grid input{
+  border:1px solid var(--line-strong); border-radius:5px; padding:7px; text-align:center; font-family:'JetBrains Mono'; font-size:12.5px;
+}
+.measure-grid input.outlier{border-color:var(--red); background:var(--red-soft); color:var(--red);}
+
+/* ===== EMPTY STATE small ===== */
+.mini-empty{padding:40px 20px; text-align:center; color:var(--gauge-grey);}
+.mini-empty .ico{font-size:32px; margin-bottom:10px; opacity:0.4;}
+.mini-empty p{font-size:13px;}
+
+/* ===== TOAST ===== */
+#toast-wrap{position:fixed; bottom:24px; right:24px; z-index:2000; display:flex; flex-direction:column; gap:8px; align-items:flex-end;}
+.toast{
+  background:var(--ink); color:#fff; padding:11px 18px; border-radius:7px; font-size:13px; font-weight:500;
+  box-shadow:var(--shadow-md); display:flex; align-items:center; gap:8px; animation:toastIn .2s ease;
+  max-width:340px;
+}
+.toast.t-error{background:var(--red);}
+.toast.t-success{background:var(--green);}
+@keyframes toastIn{from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);}}
+
+/* ===== HISTORY TAB ===== */
+.history-row{display:flex; justify-content:space-between; align-items:center; padding:13px 16px; border-bottom:1px solid var(--line);}
+.history-row:last-child{border-bottom:none;}
+.history-row .h-main{font-size:13px; font-weight:600; color:var(--ink);}
+.history-row .h-sub{font-size:11.5px; color:var(--gauge-grey); margin-top:2px;}
+.history-row .h-actions{display:flex; gap:8px;}
+
+/* scrollbar */
+::-webkit-scrollbar{width:9px; height:9px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:#D8D4C8; border-radius:5px;}
+::-webkit-scrollbar-thumb:hover{background:#C9C5B8;}
+
+/* checkbox-y status indicator */
+.status-dot{width:7px; height:7px; border-radius:50%; display:inline-block; margin-right:5px;}
+.status-dot.good{background:var(--green);}
+.status-dot.warn{background:var(--amber);}
+.status-dot.bad{background:var(--red);}
+
+@media (max-width: 980px){
+  .kpi-strip{grid-template-columns:repeat(2,1fr);}
+  .cpk-layout{grid-template-columns:1fr;}
+  #sidebar{position:fixed; z-index:90; box-shadow:var(--shadow-md);}
+}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <button class="icon-btn" id="btn-toggle-sidebar" title="목록 펼치기/접기">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+  <div class="brand"><span class="tick"></span>RUN&amp;RATE<span class="sub">양산 초기 검증 · CPK 분석</span></div>
+  <div class="spacer"></div>
+  <button class="icon-btn" id="btn-export-all" title="전체 백업 내보내기">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+  </button>
+  <button class="icon-btn" id="btn-import-all" title="백업 불러오기">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+  </button>
+</div>
+
+<div id="app">
+  <aside id="sidebar">
+    <div class="sb-header">
+      <span>프로젝트 (품번)</span>
+      <button class="btn-new-proj" id="btn-new-project">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        신규
+      </button>
+    </div>
+    <div id="proj-list"></div>
+    <div id="sidebar-footer">
+      <button class="sb-foot-btn" id="btn-clear-all">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+        전체 데이터 초기화
+      </button>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div id="main-empty">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 13h6M9 17h3"/></svg>
+      <h2>프로젝트를 선택하거나 새로 만드세요</h2>
+      <p>품번 단위로 프로젝트를 생성하고, 조립 공정을 순서대로 등록하면 공정별 Rate%·CPK 분석을 시작할 수 있습니다.</p>
+      <button class="btn btn-primary" id="btn-empty-new-project" style="margin-top:6px;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        신규 프로젝트 생성
+      </button>
+    </div>
+
+    <div id="proj-view" style="display:none; flex:1; flex-direction:column; min-height:0;">
+      <div id="proj-header">
+        <div class="ph-top">
+          <div class="ph-title-row">
+            <span class="pn-badge" id="ph-pn">P-0001</span>
+            <div>
+              <h1 id="ph-name">품명</h1>
+              <div class="ph-part" id="ph-meta">등록일 · 공정 0개</div>
+            </div>
+          </div>
+          <div class="ph-actions">
+            <button class="btn" id="btn-edit-project">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5z"/></svg>
+              프로젝트 수정
+            </button>
+            <button class="btn btn-danger-ghost" id="btn-delete-project">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+              삭제
+            </button>
+          </div>
+        </div>
+        <div class="tabs" id="tabs">
+          <div class="tab active" data-tab="overview">개요</div>
+          <div class="tab" data-tab="process">공정 등록 <span class="badge" id="badge-proc-count">0</span></div>
+          <div class="tab" data-tab="analysis">공정별 분석</div>
+          <div class="tab" data-tab="cpk">CPK 품질측정</div>
+          <div class="tab" data-tab="history">불량/이력</div>
+        </div>
+      </div>
+      <div id="content"></div>
+    </div>
+  </main>
+</div>
+
+<div id="toast-wrap"></div>
+
+<!-- ===== Modal: New/Edit Project ===== -->
+<div class="modal-overlay" id="modal-project" style="display:none;">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="modal-project-title">신규 프로젝트</h2>
+      <button class="modal-close" data-close="modal-project">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="field">
+          <label>품번 <span class="req">*</span></label>
+          <input type="text" id="inp-pn" class="mono" placeholder="예: EH-C0004">
+        </div>
+        <div class="field">
+          <label>품명 <span class="req">*</span></label>
+          <input type="text" id="inp-pname" placeholder="예: 프론트 브라켓 ASSY">
+        </div>
+      </div>
+      <div class="form-grid" style="margin-top:14px;">
+        <div class="field">
+          <label>목표 UPH (시간당 생산량)</label>
+          <input type="number" id="inp-target-uph" class="mono" placeholder="예: 120">
+        </div>
+        <div class="field">
+          <label>목표 양산 수량</label>
+          <input type="number" id="inp-target-qty" class="mono" placeholder="예: 5000">
+        </div>
+      </div>
+      <div class="field" style="margin-top:14px;">
+        <label>비고</label>
+        <textarea id="inp-remark" rows="2" placeholder="라인명, 고객사, 특이사항 등"></textarea>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close="modal-project">취소</button>
+      <button class="btn btn-primary" id="btn-save-project">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Modal: Process Register (multi-row) ===== -->
+<div class="modal-overlay" id="modal-process" style="display:none;">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h2>공정 등록 — 조립 순서</h2>
+      <button class="modal-close" data-close="modal-process">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:12px; color:var(--gauge-grey); margin-bottom:14px; line-height:1.6;">
+        품번 하나에 여러 조립 공정을 순서대로 등록합니다. 각 공정은 독립적으로 사이클타임·Rate%·CPK가 측정됩니다.
+      </p>
+      <div class="proc-input-list" id="proc-input-list"></div>
+      <button class="add-row-btn" id="btn-add-proc-row" style="margin-top:10px; width:100%;">+ 공정 추가</button>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close="modal-process">취소</button>
+      <button class="btn btn-primary" id="btn-save-process">공정 저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Modal: Defect log ===== -->
+<div class="modal-overlay" id="modal-defect" style="display:none;">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>불량 기록 추가</h2>
+      <button class="modal-close" data-close="modal-defect">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="field">
+          <label>공정</label>
+          <select id="defect-proc"></select>
+        </div>
+        <div class="field">
+          <label>불량 유형</label>
+          <input type="text" id="defect-type" placeholder="예: 치수불량, 외관불량, 미체결">
+        </div>
+      </div>
+      <div class="form-grid" style="margin-top:14px;">
+        <div class="field">
+          <label>불량 수량</label>
+          <input type="number" id="defect-qty" class="mono" value="1" min="1">
+        </div>
+        <div class="field">
+          <label>총 생산수량 (해당 시점)</label>
+          <input type="number" id="defect-total" class="mono" placeholder="예: 250">
+        </div>
+      </div>
+      <div class="field" style="margin-top:14px;">
+        <label>비고</label>
+        <input type="text" id="defect-remark" placeholder="원인, 조치 내용 등">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close="modal-defect">취소</button>
+      <button class="btn btn-primary" id="btn-save-defect">기록 저장</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// file:// 프로토콜 감지 + 모듈 스크립트(firebase-init.js/app.js) 로드 실패 시 안내
+// 이 스크립트는 일반 스크립트(module 아님)이므로 file://에서도 항상 실행됨
+(function(){
+  var overlayEl = null;
+  function showBootError(message){
+    if(overlayEl) return;
+    overlayEl = document.createElement('div');
+    overlayEl.style.cssText = 'position:fixed;inset:0;background:#1A2B42;color:#fff;z-index:99999;display:flex;align-items:center;justify-content:center;font-family:sans-serif;padding:24px;text-align:center;';
+    overlayEl.innerHTML =
+      '<div style="max-width:480px;">' +
+      '<div style="font-size:40px;margin-bottom:14px;">⚠️</div>' +
+      '<div style="font-size:18px;font-weight:700;margin-bottom:12px;">RUN&RATE를 시작할 수 없습니다</div>' +
+      '<div style="font-size:13.5px;line-height:1.7;color:#C9D4E2;">' + message + '</div>' +
+      '</div>';
+    document.body.appendChild(overlayEl);
+  }
+  function clearBootError(){
+    if(overlayEl){
+      overlayEl.remove();
+      overlayEl = null;
+    }
+  }
+  if(location.protocol === 'file:'){
+    showBootError(
+      'index.html 파일을 더블클릭해서 직접 열면(file:// 주소) 앱이 동작하지 않습니다.<br><br>' +
+      '같은 폴더의 <b>서버실행.bat</b>을 실행한 뒤, 자동으로 열리는 <b>http://localhost:8765</b> 주소에서 사용해주세요.'
+    );
+    return;
+  }
+  // http(s)인데도 firebase-init.js/app.js 모듈이 일정 시간 내 로드되지 않으면 안내
+  var booted = false;
+  window.addEventListener('firebase-ready', function(){
+    booted = true;
+    clearBootError();
+  });
+  setTimeout(function(){
+    if(!booted){
+      showBootError(
+        '앱 초기화가 지연되고 있습니다. 인터넷 연결을 확인해주세요.<br><br>' +
+        '계속 안 되면 브라우저의 개발자 도구(F12) → Console 탭에서 빨간 에러 메시지를 확인해주세요.'
+      );
+    }
+  }, 6000);
+})();
+</script>
+<script type="module" src="firebase-init.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
