@@ -512,7 +512,7 @@ function renderOverview(proj){
   const defValClass = ds.defectRate===null? '' : ds.defectRate<=1?'good':ds.defectRate<=3?'warn':'bad';
 
   return `
-  <div class="kpi-strip">
+  <div class="kpi-strip cols-5">
     <div class="kpi-card ${rateStatus}">
       <div class="kpi-label">라인 Rate% (병목기준)</div>
       <div class="kpi-value ${rateValClass}">${overallRate!==null? overallRate : '—'}<span class="kpi-unit">%</span></div>
@@ -611,12 +611,12 @@ function renderAnalysisOverallChart(rows){
     ${rows.map(r=>{
       const w = r.ratePct===null ? 0 : Math.max(3, Math.min(100, (r.ratePct/maxRate)*100));
       const tone = r.ratePct===null ? '#9CA3AF' : r.ratePct>=100 ? 'var(--green)' : r.ratePct>=90 ? 'var(--amber)' : 'var(--red)';
-      return `<div style="display:grid; grid-template-columns:170px 1fr 70px; gap:10px; align-items:center;">
-        <div style="font-size:12px; font-weight:600; color:var(--ink-soft);">${escapeHtml(r.label)}</div>
+      return `<div class="rate-bar-row">
+        <div class="rate-bar-label">${escapeHtml(r.label)}</div>
         <div style="height:10px; background:#ECE9E0; border-radius:999px; overflow:hidden;">
           <div style="width:${w}%; height:100%; background:${tone};"></div>
         </div>
-        <div class="mono" style="font-size:12px; text-align:right; color:var(--ink);">${r.ratePct===null?'—':r.ratePct+'%'}</div>
+        <div class="mono rate-bar-val">${r.ratePct===null?'—':r.ratePct+'%'}</div>
       </div>`;
     }).join('')}
   </div>`;
@@ -644,7 +644,7 @@ function renderAnalysisAllTab(proj){
   const bottleneck = findBottleneck(proj);
 
   return `
-  <div class="kpi-strip" style="grid-template-columns:repeat(5,1fr);">
+  <div class="kpi-strip cols-5">
     <div class="kpi-card"><div class="kpi-label">등록 공정 수</div><div class="kpi-value">${rows.length}<span class="kpi-unit">개</span></div></div>
     <div class="kpi-card"><div class="kpi-label">측정 완료 공정</div><div class="kpi-value">${measured}<span class="kpi-unit">개</span></div></div>
     <div class="kpi-card"><div class="kpi-label">총 측정 건수</div><div class="kpi-value">${totalSamples}<span class="kpi-unit">건</span></div></div>
@@ -724,7 +724,7 @@ function renderAnalysisTab(proj){
     </button>
   </div>
 
-  <div class="kpi-strip" id="analysis-kpi-strip" style="grid-template-columns:repeat(6,1fr);">
+  <div class="kpi-strip cols-6" id="analysis-kpi-strip">
     <div class="kpi-card">
       <div class="kpi-label">평균 사이클타임</div>
       <div class="kpi-value">${r.avgCt!==null?r.avgCt:'—'}<span class="kpi-unit">초</span></div>
@@ -760,7 +760,7 @@ function renderAnalysisTab(proj){
   <div class="panel">
     <div class="panel-head"><h3>CAPA 분석</h3></div>
     <div class="panel-body">
-      <div class="kpi-strip" style="grid-template-columns:repeat(3,1fr); margin-bottom:12px;">
+      <div class="kpi-strip cols-3" style="margin-bottom:12px;">
         <div class="kpi-card"><div class="kpi-label">목표 UPH</div><div class="kpi-value">${cap.targetUph??'—'}</div></div>
         <div class="kpi-card"><div class="kpi-label">실측 UPH</div><div class="kpi-value">${cap.actualUph??'—'}</div></div>
         <div class="kpi-card"><div class="kpi-label">CT 차이(목표-실측)</div><div class="kpi-value ${ctGapSec===null?'':ctGapSec>=0?'good':'bad'}">${ctGapSec??'—'}<span class="kpi-unit">초</span></div></div>
@@ -1001,7 +1001,7 @@ function renderHistoryTab(proj){
   const overallRate = projectOverallRate(proj);
   const rrClass = overallRate===null? '' : overallRate>=100?'good':overallRate>=90?'warn':'bad';
   return `
-  <div class="kpi-strip" style="grid-template-columns:repeat(6,1fr); margin-bottom:18px;">
+  <div class="kpi-strip cols-6" style="margin-bottom:18px;">
     <div class="kpi-card">
       <div class="kpi-label">전체 RunRate%</div>
       <div class="kpi-value ${rrClass}">${overallRate??'—'}<span class="kpi-unit">%</span></div>
