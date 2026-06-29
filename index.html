@@ -333,7 +333,7 @@ table.data-table .del-cell{cursor:pointer; color:var(--gauge-grey); text-align:c
 table.data-table .del-cell:hover{color:var(--red);}
 
 /* ===== CPK CARD ===== */
-.cpk-layout{display:grid; grid-template-columns:280px 1fr; gap:20px;}
+.cpk-layout{display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start;}
 .cpk-gauge-box{
   background:#fff; border:1px solid var(--line); border-radius:10px; padding:18px; text-align:center;
 }
@@ -341,6 +341,14 @@ table.data-table .del-cell:hover{color:var(--red);}
 .cpk-big.good{color:var(--green);}
 .cpk-big.warn{color:#9A6B1F;}
 .cpk-big.bad{color:var(--red);}
+.cpk-mode-badge{
+  display:inline-flex; align-items:center; justify-content:center;
+  margin-top:10px; padding:5px 14px; border-radius:999px;
+  font-size:14px; font-weight:800; letter-spacing:0.02em;
+}
+.cpk-mode-badge.higher{background:var(--amber-soft); color:#9A6B1F;}
+.cpk-mode-badge.lower{background:var(--green-soft); color:var(--green);}
+.cpk-mode-badge.standard{background:#EEF2F7; color:var(--ink-soft);}
 .cpk-grade{
   display:inline-block; margin-top:8px; padding:3px 12px; border-radius:14px; font-size:11.5px; font-weight:700; letter-spacing:0.03em;
 }
@@ -348,6 +356,19 @@ table.data-table .del-cell:hover{color:var(--red);}
 .cpk-stat{text-align:left;}
 .cpk-stat .lbl{font-size:10px; color:var(--gauge-grey); text-transform:uppercase; letter-spacing:0.04em;}
 .cpk-stat .val{font-family:'JetBrains Mono'; font-size:15px; font-weight:700; color:var(--ink);}
+.cpk-orientation-wrap{margin-top:14px; padding-top:14px; border-top:1px solid var(--line);}
+.cpk-orientation-label{font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:var(--gauge-grey); margin-bottom:8px;}
+.cpk-orientation-toggle{display:flex; flex-wrap:wrap; gap:6px;}
+.cpk-orientation-btn{
+  border:1px solid var(--line-strong); background:#fff; color:var(--ink-soft);
+  border-radius:999px; padding:7px 12px; font-size:12px; font-weight:700; cursor:pointer; transition:all .12s;
+}
+.cpk-orientation-btn:hover{border-color:var(--ink); color:var(--ink);}
+.cpk-orientation-btn.active{color:#fff; border-color:transparent; box-shadow:0 3px 10px rgba(26,43,66,0.14);}
+.cpk-orientation-btn.active[data-cpk-orientation="high"]{background:#B86E00;}
+.cpk-orientation-btn.active[data-cpk-orientation="mid"]{background:var(--ink);}
+.cpk-orientation-btn.active[data-cpk-orientation="low"]{background:var(--green);}
+.cpk-orientation-help{font-size:11px; color:var(--gauge-grey); margin-top:6px; line-height:1.5;}
 
 .input-mode-toggle{display:flex; background:#F2F0E9; border-radius:7px; padding:3px; gap:2px; width:fit-content; margin-bottom:14px;}
 .imt-btn{padding:7px 16px; border-radius:5px; font-size:12px; font-weight:600; color:var(--gauge-grey); cursor:pointer; border:none; background:transparent; transition:all .12s;}
