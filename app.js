@@ -353,6 +353,17 @@ function computeCp({sd, usl, lsl}){
   if(sd===0 || !sd || usl===null||usl===undefined||lsl===null||lsl===undefined) return null;
   return (usl-lsl)/(6*sd);
 }
+function isLowerBetterCpk(cd){
+  const text = `${cd?.itemName||''} ${cd?.unit||''}`;
+  return /리크|누설|leak|leakage/i.test(text);
+}
+function getCpkOrientation(cd){
+  if(!cd) return 'mid';
+  if(cd?.analysisMode === 'high') return 'high';
+  if(cd?.analysisMode === 'mid') return 'mid';
+  if(cd?.analysisMode === 'low') return 'low';
+  return isLowerBetterCpk(cd) ? 'low' : 'mid';
+}
 function cpkGrade(cpk){
   if(cpk===null) return {label:'데이터 없음', cls:'warn'};
   if(cpk >= 1.67) return {label:'매우 우수 (S급)', cls:'good'};
@@ -379,9 +390,36 @@ function computeCpkSummary(proj, processId){
   }
   const usl = cd.usl!==undefined && cd.usl!==null && cd.usl!=='' ? Number(cd.usl) : null;
   const lsl = cd.lsl!==undefined && cd.lsl!==null && cd.lsl!=='' ? Number(cd.lsl) : null;
-  const cpk = computeCpk({mean:m, sd, usl, lsl});
+  const cpu = (usl!==null && usl!==undefined) ? (usl - m) / (3*sd) : null;
+  const cpl = (lsl!==null && lsl!==undefined) ? (m - lsl) / (3*sd) : null;
+  const orientation = getCpkOrientation(cd);
+  const lowerBetter = orientation === 'low';
+  const upperBetter = orientation === 'high';
+  const cpk = orientation === 'high' ? cpl : orientation === 'low' ? cpu : computeCpk({mean:m, sd, usl, lsl});
   const cp = computeCp({sd, usl, lsl});
-  return { cpk: cpk!==null? round(cpk,3): null, cp: cp!==null? round(cp,3): null, m: round(m,4), sd: round(sd,4), n, usl, lsl, target: cd.target };
+  return {
+    cpk: cpk!==null? round(cpk,3): null,
+    cp: cp!==null? round(cp,3): null,
+    cpu: cpu!==null? round(cpu,3): null,
+    cpl: cpl!==null? round(cpl,3): null,
+    m: round(m,4),
+    sd: round(sd,4),
+    n,
+    usl,
+    lsl,
+    target: cd.target,
+    lowerBetter,
+    upperBetter,
+    orientation,
+    metricName: orientation === 'high' ? 'Cpl' : orientation === 'low' ? 'Cpu' : 'CPK',
+    modeLabel: orientation === 'high' ? '높음 중심' : orientation === 'low' ? '낮음 중심' : '중간 중심',
+    modeTone: orientation === 'high' ? 'higher' : orientation === 'low' ? 'lower' : 'standard',
+    modeNote: orientation === 'high'
+      ? '높을수록 좋은 항목은 하한 여유(Cpl)를 중심으로 해석합니다.'
+      : orientation === 'low'
+        ? '낮을수록 좋은 항목은 상한 여유(Cpu)를 중심으로 해석합니다.'
+        : '일반적인 ± 공차는 양측 규격(CPK)으로 해석합니다.'
+  };
 }
 
 // ===================================================================
@@ -781,8 +819,9 @@ function renderCpkTab(proj){
     state.cpkProcessId = proj.processes.slice().sort((a,b)=>a.seq-b.seq)[0].id;
   }
   const proc = proj.processes.find(p=>p.id===state.cpkProcessId);
-  if(!proj.cpkData[proc.id]) proj.cpkData[proc.id] = { mode:'raw', raw:[], usl:null, lsl:null, target:null, statsMean:null, statsSd:null, statsN:null, itemName:'', unit:'' };
+  if(!proj.cpkData[proc.id]) proj.cpkData[proc.id] = { mode:'raw', raw:[], usl:null, lsl:null, target:null, statsMean:null, statsSd:null, statsN:null, itemName:'', unit:'', analysisMode:'mid' };
   const cd = proj.cpkData[proc.id];
+  if(!cd.analysisMode) cd.analysisMode = getCpkOrientation(cd);
   state.cpkInputMode = cd.mode || 'raw';
   const summary = computeCpkSummary(proj, proc.id);
   const grade = cpkGrade(summary.cpk);
@@ -826,20 +865,32 @@ function renderCpkTab(proj){
           <button class="btn btn-sm" id="btn-save-spec">규격 저장</button>
         </div>
       </div>
+      <div class="cpk-orientation-wrap">
+        <div class="cpk-orientation-label">해석 모드</div>
+        <div class="cpk-orientation-toggle" role="group" aria-label="CPK 해석 모드">
+          <button class="cpk-orientation-btn ${summary.orientation==='high'?'active':''} mode-high" data-cpk-orientation="high">높음</button>
+          <button class="cpk-orientation-btn ${summary.orientation==='mid'?'active':''} mode-mid" data-cpk-orientation="mid">중간</button>
+          <button class="cpk-orientation-btn ${summary.orientation==='low'?'active':''} mode-low" data-cpk-orientation="low">낮음</button>
+        </div>
+        <div class="cpk-orientation-help">높음은 하한 중심, 중간은 양측 규격, 낮음은 상한 중심으로 해석합니다.</div>
+      </div>
     </div>
   </div>
 
   <div class="cpk-layout">
     <div class="cpk-gauge-box">
-      <div class="kpi-label" style="margin-bottom:4px;">CPK 지수</div>
+      <div class="kpi-label" style="margin-bottom:4px;">${summary.orientation==='high' ? '하한 중심 품질지수' : summary.orientation==='low' ? '상한 중심 품질지수' : 'CPK 지수'}</div>
       <div class="cpk-big ${grade.cls}">${summary.cpk!==null? summary.cpk.toFixed(2) : '—'}</div>
+      <div class="cpk-mode-badge ${summary.orientation==='high' ? 'higher' : summary.orientation==='low' ? 'lower' : 'standard'}">${summary.modeLabel}</div>
       <div class="cpk-grade" style="background:${grade.cls==='good'?'var(--green-soft)':grade.cls==='warn'?'var(--amber-soft)':'var(--red-soft)'}; color:${grade.cls==='good'?'var(--green)':grade.cls==='warn'?'#9A6B1F':'var(--red)'};">${grade.label}</div>
       <div class="cpk-stats">
+        <div class="cpk-stat"><div class="lbl">${summary.metricName}</div><div class="val">${summary.cpk!==null?summary.cpk.toFixed(2):'—'}</div></div>
         <div class="cpk-stat"><div class="lbl">CP</div><div class="val">${summary.cp!==null?summary.cp.toFixed(2):'—'}</div></div>
         <div class="cpk-stat"><div class="lbl">표본수 N</div><div class="val">${summary.n}</div></div>
         <div class="cpk-stat"><div class="lbl">평균</div><div class="val">${summary.m??'—'}</div></div>
         <div class="cpk-stat"><div class="lbl">표준편차σ</div><div class="val">${summary.sd??'—'}</div></div>
       </div>
+      <div class="h-sub" style="margin-top:10px; color:var(--gauge-grey);">${summary.modeNote}</div>
       <div style="margin-top:14px;">${renderCpkSvg(summary)}</div>
     </div>
 
@@ -903,7 +954,10 @@ function renderCpkRawInput(cd){
     <input type="number" step="any" id="cpk-raw-single" class="mono" placeholder="예: 10.02">
     <div class="hint">값 입력 후 Enter 키 또는 "기록" 버튼을 누르세요.</div>
   </div>
-  <button class="btn btn-sm" id="btn-add-raw-one">기록</button>
+  <div style="display:flex; gap:8px; align-items:center;">
+    <button class="btn btn-sm" id="btn-add-raw-one">기록</button>
+    ${raw.length>0 ? `<button class="btn btn-sm" id="btn-clear-all-raw" style="color:var(--red); border-color:var(--red);">전체삭제</button>` : ''}
+  </div>
   <div style="margin-top:14px;">
     <table class="data-table">
       <thead><tr><th>#</th><th>측정값</th><th></th></tr></thead>
@@ -1118,8 +1172,9 @@ function exportCpkCSV(proj, proc){
   rows.push(['측정항목', cd.itemName||'—', '단위', cd.unit||'—']);
   rows.push(['USL', cd.usl??'—', 'LSL', cd.lsl??'—', 'Target', cd.target??'—']);
   rows.push(['입력방식', cd.mode==='raw'?'개별측정값':'통계값 직접입력']);
+  rows.push(['해석모드', summary.orientation==='high' ? '높음 중심 (Cpl 중심)' : summary.orientation==='low' ? '낮음 중심 (Cpu 중심)' : '중간 중심 (CPK 중심)']);
   rows.push(['평균', summary.m??'—', '표준편차', summary.sd??'—', '표본수', summary.n]);
-  rows.push(['CP', summary.cp??'—', 'CPK', summary.cpk??'—', '판정', cpkGrade(summary.cpk).label]);
+  rows.push([summary.metricName, summary.cpk??'—', 'CP', summary.cp??'—', '판정', cpkGrade(summary.cpk).label]);
   rows.push([]);
   if(cd.mode==='raw'){
     csvSection(rows, '개별 측정값');
@@ -1132,7 +1187,7 @@ function exportCpkCSV(proj, proc){
 }
 
 function exportDefectsCSV(proj){
-  const rows = csvReportHeader('RUN&RATE 불량 이력 리포트', proj);
+  const rows = csvReportHeader('RUN&RATE 결과 이력 리포트', proj);
   const ds = defectSummary(proj,null);
   csvSection(rows, '요약');
   rows.push(['목표수량(EA)', proj.targetQty??'—', '누적생산수량(EA)', ds.totalProduced]);
@@ -1163,7 +1218,7 @@ function exportDefectsCSV(proj){
   });
   rows.push([]);
   rows.push(['비고', '공정별 품질 상세는 불량 기록의 총생산수량(total) 기준으로 계산됩니다.']);
-  downloadCSV(`RunRate_${proj.pn}_불량이력_${fmtDateShort(nowISO())}.csv`, rows);
+  downloadCSV(`RunRate_${proj.pn}_결과이력_${fmtDateShort(nowISO())}.csv`, rows);
 }
 
 function exportOnePageSummaryCSV(proj){
@@ -1552,6 +1607,21 @@ function attachContentEvents(proj){
       renderContent();
     });
   });
+  document.querySelectorAll('[data-cpk-orientation]').forEach(el=>{
+    el.addEventListener('click', async ()=>{
+      const analysisMode = el.dataset.cpkOrientation;
+      try{
+        const cd = proj.cpkData[state.cpkProcessId];
+        if(cd) cd.analysisMode = analysisMode;
+        await fb.setDoc(fb.doc(cpkCol(proj.id), state.cpkProcessId), { analysisMode }, { merge: true });
+        toast(analysisMode === 'high' ? '높음 중심으로 설정했습니다' : (analysisMode === 'low' ? '낮음 중심으로 설정했습니다' : '중간 중심으로 설정했습니다'), 'success');
+      }catch(e){
+        toast('저장 실패: '+e.message, 'error');
+        return;
+      }
+      renderContent();
+    });
+  });
   const saveSpecBtn = document.getElementById('btn-save-spec');
   if(saveSpecBtn) saveSpecBtn.addEventListener('click', async ()=>{
     const itemName = document.getElementById('cpk-item-name').value.trim();
@@ -1565,10 +1635,33 @@ function attachContentEvents(proj){
         target: t===''? null : Number(t),
         usl: u===''? null : Number(u),
         lsl: l===''? null : Number(l),
+        analysisMode: getCpkOrientation(proj.cpkData[state.cpkProcessId]),
         mode: state.cpkInputMode
       }, { merge: true });
+      const cd = proj.cpkData[state.cpkProcessId];
+      if(cd){
+        cd.itemName = itemName;
+        cd.unit = unit;
+        cd.target = t===''? null : Number(t);
+        cd.usl = u===''? null : Number(u);
+        cd.lsl = l===''? null : Number(l);
+        cd.analysisMode = getCpkOrientation(cd);
+      }
       toast('규격이 저장되었습니다', 'success');
     }catch(e){ toast('저장 실패: '+e.message, 'error'); }
+  });
+  const clearAllBtn = document.getElementById('btn-clear-all-raw');
+  if(clearAllBtn) clearAllBtn.addEventListener('click', async ()=>{
+    if(!confirm('측정값 전체를 삭제하시겠습니까?')) return;
+    try{
+      const cd = proj.cpkData[state.cpkProcessId];
+      await fb.setDoc(fb.doc(cpkCol(proj.id), state.cpkProcessId), {
+        raw: [],
+        analysisMode: getCpkOrientation(cd),
+        mode: state.cpkInputMode
+      }, { merge: true });
+      toast('측정값 전체가 삭제되었습니다', 'success');
+    }catch(e){ toast('삭제 실패: '+e.message, 'error'); }
   });
   const addOneBtn = document.getElementById('btn-add-raw-one');
   if(addOneBtn) addOneBtn.addEventListener('click', async ()=>{
@@ -1581,6 +1674,7 @@ function attachContentEvents(proj){
       const newRaw = (cd.raw || []).concat([val]);
       await fb.setDoc(fb.doc(cpkCol(proj.id), state.cpkProcessId), {
         raw: newRaw,
+        analysisMode: getCpkOrientation(cd),
         mode: state.cpkInputMode
       }, { merge: true });
       input.value = '';
@@ -1605,6 +1699,7 @@ function attachContentEvents(proj){
         const newRaw = (cd.raw || []).concat([val]);
         await fb.setDoc(fb.doc(cpkCol(proj.id), state.cpkProcessId), {
           raw: newRaw,
+          analysisMode: getCpkOrientation(cd),
           mode: state.cpkInputMode
         }, { merge: true });
         rawSingleInput.value = '';
