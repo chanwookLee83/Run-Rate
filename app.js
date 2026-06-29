@@ -1576,24 +1576,46 @@ function attachContentEvents(proj){
     const val = Number(input.value);
     if(!input.value || isNaN(val)){ toast('유효한 측정값을 입력하세요', 'error'); return; }
     try{
-      // arrayUnion으로 원자적 추가 — 기존 배열을 읽어서 통째로 다시쓰지 않으므로 덮어쓰기 위험 없음
+      // 배열을 직접 읽어서 추가 — 중복값도 허용
+      const cd = proj.cpkData[state.cpkProcessId];
+      const newRaw = (cd.raw || []).concat([val]);
       await fb.setDoc(fb.doc(cpkCol(proj.id), state.cpkProcessId), {
-        raw: fb.arrayUnion(val),
+        raw: newRaw,
         mode: state.cpkInputMode
       }, { merge: true });
       input.value = '';
-      input.focus();
-      toast('측정값 1건이 기록되었습니다', 'success');
+      toast(`측정값 #${newRaw.length} 기록되었습니다`, 'success');
+      // 렌더링 완료 후 포커스 설정 — requestAnimationFrame으로 렌더링 사이클 대기
+      requestAnimationFrame(()=>{
+        requestAnimationFrame(()=>{
+          document.getElementById('cpk-raw-single')?.focus();
+        });
+      });
     }catch(e){ toast('추가 실패: '+e.message, 'error'); }
   });
   const rawSingleInput = document.getElementById('cpk-raw-single');
-  if(rawSingleInput) rawSingleInput.addEventListener('keydown', (e)=>{
+  if(rawSingleInput) rawSingleInput.addEventListener('keydown', async (e)=>{
     if(e.key==='Enter'){
       e.preventDefault();
-      const btn = document.getElementById('btn-add-raw-one');
-      if(btn) btn.click();
-      // 포커스 유지: Enter 후 다시 입력 필드에 포커스
-      setTimeout(()=>{ rawSingleInput.focus(); }, 0);
+      const val = Number(rawSingleInput.value);
+      if(!rawSingleInput.value || isNaN(val)){ toast('유효한 측정값을 입력하세요', 'error'); return; }
+      try{
+        // 배열을 직접 읽어서 추가 — 중복값도 허용
+        const cd = proj.cpkData[state.cpkProcessId];
+        const newRaw = (cd.raw || []).concat([val]);
+        await fb.setDoc(fb.doc(cpkCol(proj.id), state.cpkProcessId), {
+          raw: newRaw,
+          mode: state.cpkInputMode
+        }, { merge: true });
+        rawSingleInput.value = '';
+        toast(`측정값 #${newRaw.length} 기록되었습니다`, 'success');
+        // 렌더링 완료 후 포커스 설정 — requestAnimationFrame으로 렌더링 사이클 대기
+        requestAnimationFrame(()=>{
+          requestAnimationFrame(()=>{
+            document.getElementById('cpk-raw-single')?.focus();
+          });
+        });
+      }catch(ex){ toast('추가 실패: '+ex.message, 'error'); }
     }
   });
   document.querySelectorAll('[data-del-raw]').forEach(el=>{
