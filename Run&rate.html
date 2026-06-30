@@ -451,12 +451,13 @@ table.data-table .del-cell:hover{color:var(--red);}
 .col-headers, .process-row{min-width:580px;}
 
 /* ===== Rate 바 차트 ===== */
-.rate-bar-row{display:grid; grid-template-columns:180px 1fr 60px; align-items:center; gap:12px;}
+.rate-bar-row{display:grid; grid-template-columns:auto minmax(80px,300px) 60px; align-items:center; gap:12px;}
+.rate-bar-label{white-space:nowrap; font-size:13px; font-weight:500;}
 @media (max-width:860px){
-  .rate-bar-row{grid-template-columns:140px 1fr 54px; gap:8px;}
+  .rate-bar-row{grid-template-columns:auto minmax(60px,220px) 54px; gap:8px;}
 }
 @media (max-width:640px){
-  .rate-bar-row{grid-template-columns:110px 1fr 48px; gap:6px;}
+  .rate-bar-row{grid-template-columns:auto minmax(50px,160px) 48px; gap:6px;}
   .rate-bar-label{font-size:11px !important;}
 }
 
@@ -667,7 +668,7 @@ table.data-table .del-cell:hover{color:var(--red);}
 <div class="modal-overlay" id="modal-defect" style="display:none;">
   <div class="modal">
     <div class="modal-head">
-      <h2>불량 기록 추가</h2>
+      <h2 id="modal-defect-title">Run&amp;Rate 기록</h2>
       <button class="modal-close" data-close="modal-defect">&times;</button>
     </div>
     <div class="modal-body">
@@ -684,7 +685,7 @@ table.data-table .del-cell:hover{color:var(--red);}
       <div class="form-grid" style="margin-top:14px;">
         <div class="field">
           <label>불량 수량</label>
-          <input type="number" id="defect-qty" class="mono" value="1" min="1">
+          <input type="number" id="defect-qty" class="mono" value="0" min="0">
         </div>
         <div class="field">
           <label>총 생산수량 (해당 시점)</label>

@@ -1347,15 +1347,15 @@ function openDefectModal(proj, defect){
     if(saveBtn) saveBtn.textContent = '수정 저장';
     sel.value = defect.processId || '';
     document.getElementById('defect-type').value = defect.type || '';
-    document.getElementById('defect-qty').value = defect.qty || 1;
+    document.getElementById('defect-qty').value = defect.qty ?? 0;
     document.getElementById('defect-total').value = defect.total ?? '';
     document.getElementById('defect-remark').value = defect.remark || '';
   } else {
     editingDefectId = null;
-    if(title) title.textContent = '결과 기록 추가';
+    if(title) title.textContent = 'Run&Rate 기록 추가';
     if(saveBtn) saveBtn.textContent = '결과 저장';
     document.getElementById('defect-type').value='';
-    document.getElementById('defect-qty').value=1;
+    document.getElementById('defect-qty').value=0;
     document.getElementById('defect-total').value='';
     document.getElementById('defect-remark').value='';
   }
@@ -1482,9 +1482,12 @@ function addProcRow(data){
     <input type="text" placeholder="공정명 (예: 1차 압입)" class="proc-name-inp" value="${data?escapeHtml(data.name):''}">
     <input type="text" placeholder="설비명 (선택)" class="proc-eq-inp" style="max-width:130px;" value="${data?escapeHtml(data.eq||''):''}">
     <input type="number" step="any" placeholder="목표C/T(초)" class="proc-ct-inp mono" style="max-width:110px;" value="${data&&data.targetCt?data.targetCt:''}">
-    <input type="number" step="0.5" min="0.5" placeholder="인원(명)" class="proc-manpower-inp mono" style="max-width:90px;" value="${data&&data.manpower?data.manpower:1}">
+    <input type="number" step="0.5" min="0.5" placeholder="인원(명)" class="proc-manpower-inp mono" style="max-width:90px;">
     <div class="icon-mini btn-remove-row" title="삭제">&times;</div>
   `;
+  const mpInp = row.querySelector('.proc-manpower-inp');
+  if(data && data.manpower != null) mpInp.value = data.manpower;
+  else mpInp.value = '';
   row.querySelector('.btn-remove-row').addEventListener('click', ()=>{ row.remove(); renumberProcRows(); });
   list.appendChild(row);
 }
