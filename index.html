@@ -97,6 +97,11 @@ body{
   transition:margin-left .2s ease;
 }
 #sidebar.collapsed{margin-left:-280px;}
+#sidebar-overlay{
+  display:none; position:fixed; inset:0; z-index:89;
+  background:rgba(26,43,66,0.35); backdrop-filter:blur(1px);
+  cursor:pointer;
+}
 .sb-header{
   padding:16px 16px 10px; display:flex; justify-content:space-between; align-items:center;
 }
@@ -519,6 +524,7 @@ table.data-table .del-cell:hover{color:var(--red);}
       </button>
     </div>
   </aside>
+  <div id="sidebar-overlay"></div>
 
   <main id="main">
     <div id="main-empty">
