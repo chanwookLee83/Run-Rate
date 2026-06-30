@@ -1,4 +1,4 @@
-const CACHE_NAME = 'runrate-cache-v6';
+const CACHE_NAME = 'runrate-cache-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -27,6 +27,9 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
+  // CDN/외부 URL(Firebase SDK 등)은 항상 네트워크에서 직접 가져옴 (SW 캐시 제외)
+  const url = new URL(e.request.url);
+  if (url.origin !== self.location.origin) return;
   e.respondWith(
     caches.match(e.request).then((cached) => {
       if (cached) return cached;

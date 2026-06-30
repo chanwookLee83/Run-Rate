@@ -10,13 +10,12 @@
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
 import {
-  getFirestore,
+  initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
   collection, doc,
   addDoc, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
   onSnapshot, query, orderBy,
   serverTimestamp, writeBatch,
-  arrayUnion, arrayRemove,
-  enableIndexedDbPersistence
+  arrayUnion, arrayRemove
 } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -30,11 +29,9 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-
-// 오프라인 캐시 활성화: 인터넷 끊겨도 측정 계속 가능, 재연결시 자동 동기화
-enableIndexedDbPersistence(db).catch((err) => {
-  console.warn('오프라인 캐시 비활성화 (다른 탭에서 이미 열려있을 수 있음):', err.code);
+// 오프라인 캐시 활성화 (멀티탭 동기화 지원): 인터넷 끊겨도 측정 계속 가능, 재연결시 자동 동기화
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
 });
 
 // app.js(non-module 패턴 유지)에서 쓸 수 있도록 전역에 노출
