@@ -1067,7 +1067,7 @@ function renderHistoryTab(proj){
       <h3>공정별 품질 상세</h3>
       <span class="ph-tag">${procRows.length}개 공정</span>
     </div>
-    <div class="panel-body" style="padding:0;">
+    <div class="panel-body" style="padding:0; overflow-x:auto; -webkit-overflow-scrolling:touch;">
       ${procRows.length===0 ? `<div class="mini-empty"><p>등록된 공정이 없습니다.</p></div>` : `
       <table class="data-table">
         <thead><tr><th>공정</th><th>생산수량(EA)</th><th>양품수량(EA)</th><th>불량수량(EA)</th><th>불량률(%)</th><th>수율(%)</th><th>Rate%(RunRate)</th><th>목표대비 진척률(%)</th></tr></thead>
