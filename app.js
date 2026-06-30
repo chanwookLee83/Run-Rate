@@ -2127,6 +2127,13 @@ if(window.__firebase){
 // register service worker for PWA (production only)
 // localhost 개발 중에는 캐시된 index.html 때문에 최신 수정이 안 보일 수 있어 SW를 해제한다.
 if('serviceWorker' in navigator){
+  // 새 서비스워커가 제어권을 가져오면(업데이트 활성화) 페이지를 한 번 자동 새로고침해 최신 화면을 보여준다.
+  let swRefreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', ()=>{
+    if(swRefreshing) return;
+    swRefreshing = true;
+    window.location.reload();
+  });
   window.addEventListener('load', async ()=>{
     const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
     if(isLocalhost){
@@ -2136,6 +2143,10 @@ if('serviceWorker' in navigator){
       }catch(_e){}
       return;
     }
-    navigator.serviceWorker.register('sw.js').catch(()=>{});
+    try{
+      const reg = await navigator.serviceWorker.register('sw.js');
+      // 즉시 업데이트 확인
+      reg.update().catch(()=>{});
+    }catch(_e){}
   });
 }
