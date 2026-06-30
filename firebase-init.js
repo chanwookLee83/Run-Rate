@@ -29,10 +29,23 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-// 오프라인 캐시 활성화 (멀티탭 동기화 지원): 인터넷 끊겨도 측정 계속 가능, 재연결시 자동 동기화
-const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
-});
+// 오프라인 캐시 활성화: 멀티탭 → 단일탭 → 기본 순으로 fallback
+let db;
+try {
+  db = initializeFirestore(app, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+  });
+} catch(e) {
+  console.warn('[Firebase] 멀티탭 캐시 초기화 실패, 단일탭 모드로 재시도:', e.message);
+  try {
+    db = initializeFirestore(app, {
+      localCache: persistentLocalCache()
+    });
+  } catch(e2) {
+    console.warn('[Firebase] 오프라인 캐시 비활성화, 기본 모드 사용:', e2.message);
+    db = initializeFirestore(app, {});
+  }
+}
 
 // app.js(non-module 패턴 유지)에서 쓸 수 있도록 전역에 노출
 window.__firebase = {

@@ -2104,9 +2104,14 @@ document.getElementById('btn-clear-all').addEventListener('click', async ()=>{
 function init(){
   fb = window.__firebase;
   if(!fb){
+    setConnStatus(false);
     toast('Firebase 초기화 실패: 네트워크 또는 설정을 확인하세요', 'error');
     return;
   }
+  // 12초 내 첫 Firestore 응답이 없으면 '연결 끊김' 상태로 전환 (무한 대기 방지)
+  setTimeout(() => {
+    if(!state.connected) setConnStatus(false);
+  }, 12000);
   subscribeProjects();
 }
 
