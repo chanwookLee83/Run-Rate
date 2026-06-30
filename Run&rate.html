@@ -83,9 +83,15 @@ body{
   width:280px; min-width:280px; height:100vh; padding-top:56px;
   background:var(--panel); border-right:1px solid var(--line);
   display:flex; flex-direction:column;
-  transition:margin-left .2s ease;
+  transition:margin-left .25s cubic-bezier(.4,0,.2,1);
+  position:relative; z-index:90;
 }
 #sidebar.collapsed{margin-left:-280px;}
+#sidebar-overlay{
+  display:none; position:fixed; inset:0; z-index:89;
+  background:rgba(26,43,66,0.35); backdrop-filter:blur(1px);
+  cursor:pointer;
+}
 .sb-header{
   padding:16px 16px 10px; display:flex; justify-content:space-between; align-items:center;
 }
@@ -180,6 +186,9 @@ body{
 
 /* ===== KPI STRIP ===== */
 .kpi-strip{display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:22px;}
+.kpi-strip.cols-3{grid-template-columns:repeat(3,1fr);}
+.kpi-strip.cols-4{grid-template-columns:repeat(4,1fr);}
+.kpi-strip.cols-6{grid-template-columns:repeat(6,1fr);}
 .kpi-card{
   background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px 16px;
   position:relative; overflow:hidden;
@@ -207,7 +216,7 @@ body{
 
 /* ===== PROCESS LIST (tree under proj) ===== */
 .process-row{
-  display:grid; grid-template-columns:28px 1fr 100px 100px 110px 90px 40px;
+  display:grid; grid-template-columns:28px 1fr 70px 100px 100px 110px 90px 40px;
   align-items:center; gap:10px; padding:11px 14px; border-bottom:1px solid var(--line);
   font-size:12.5px; cursor:pointer; transition:background .12s;
 }
@@ -232,8 +241,8 @@ body{
 .icon-mini:hover{border-color:var(--ink); color:var(--ink);}
 
 .col-headers{
-  display:grid; grid-template-columns:28px 1fr 100px 100px 110px 90px 40px;
-  gap:10px; padding:0 14px 8px; font-size:10px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; color:var(--gauge-grey);
+  display:grid; grid-template-columns:28px 1fr 70px 100px 100px 110px 90px 40px;
+  gap:10px; padding:0 14px 8px; font-size:12px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; color:var(--gauge-grey);
 }
 
 /* ===== FORM ELEMENTS ===== */
@@ -335,6 +344,58 @@ table.data-table .del-cell:hover{color:var(--red);}
 .cpk-stat .lbl{font-size:10px; color:var(--gauge-grey); text-transform:uppercase; letter-spacing:0.04em;}
 .cpk-stat .val{font-family:'JetBrains Mono'; font-size:15px; font-weight:700; color:var(--ink);}
 
+/* ===== CPK ORIENTATION BUTTONS ===== */
+.cpk-orientation-wrap{display:flex; flex-direction:column; gap:6px; margin-bottom:16px;}
+.cpk-orientation-label{font-size:10.5px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:var(--gauge-grey);}
+.cpk-orientation-help{font-size:11px; color:var(--gauge-grey); margin-top:2px;}
+.cpk-orientation-toggle{display:flex; gap:6px; align-items:center;}
+.cpk-orientation-btn{
+  position:relative; display:inline-flex; align-items:center; justify-content:center;
+  padding:7px 20px; border-radius:999px; border:1.5px solid transparent;
+  font-family:'Inter',sans-serif; font-size:12px; font-weight:700; letter-spacing:0.04em;
+  cursor:pointer; transition:all .18s ease; white-space:nowrap; overflow:hidden;
+}
+.cpk-orientation-btn::before{
+  content:''; position:absolute; inset:0; border-radius:inherit; opacity:0.12; transition:opacity .18s;
+}
+.cpk-orientation-btn:hover::before{opacity:0.22;}
+
+/* 높음 — 블루 계열 */
+.cpk-orientation-btn.mode-high{
+  background:linear-gradient(135deg,#EEF4FB 0%,#DDE9F5 100%);
+  border-color:#A8C4DF; color:#1C4A72;
+}
+.cpk-orientation-btn.mode-high::before{background:#2B5C8A;}
+.cpk-orientation-btn.mode-high.active{
+  background:linear-gradient(135deg,#2B5C8A 0%,#1C4068 100%);
+  border-color:#1C4068; color:#fff;
+  box-shadow:0 4px 14px rgba(43,92,138,0.35), 0 1px 3px rgba(43,92,138,0.2);
+}
+
+/* 중간 — 그린 계열 */
+.cpk-orientation-btn.mode-mid{
+  background:linear-gradient(135deg,#ECF6F1 0%,#D9EEE4 100%);
+  border-color:#9DCBB3; color:#1A5C3A;
+}
+.cpk-orientation-btn.mode-mid::before{background:#2D8659;}
+.cpk-orientation-btn.mode-mid.active{
+  background:linear-gradient(135deg,#2D8659 0%,#1E5C3C 100%);
+  border-color:#1E5C3C; color:#fff;
+  box-shadow:0 4px 14px rgba(45,134,89,0.35), 0 1px 3px rgba(45,134,89,0.2);
+}
+
+/* 낮음 — 앰버 계열 */
+.cpk-orientation-btn.mode-low{
+  background:linear-gradient(135deg,#FDF5E6 0%,#FAE9C5 100%);
+  border-color:#E8C37A; color:#7A4A0A;
+}
+.cpk-orientation-btn.mode-low::before{background:#E8A33D;}
+.cpk-orientation-btn.mode-low.active{
+  background:linear-gradient(135deg,#E8A33D 0%,#C47E1A 100%);
+  border-color:#C47E1A; color:#fff;
+  box-shadow:0 4px 14px rgba(232,163,61,0.40), 0 1px 3px rgba(232,163,61,0.25);
+}
+
 .input-mode-toggle{display:flex; background:#F2F0E9; border-radius:7px; padding:3px; gap:2px; width:fit-content; margin-bottom:14px;}
 .imt-btn{padding:7px 16px; border-radius:5px; font-size:12px; font-weight:600; color:var(--gauge-grey); cursor:pointer; border:none; background:transparent; transition:all .12s;}
 .imt-btn.active{background:#fff; color:var(--ink); box-shadow:var(--shadow-sm);}
@@ -380,10 +441,76 @@ table.data-table .del-cell:hover{color:var(--red);}
 .status-dot.warn{background:var(--amber);}
 .status-dot.bad{background:var(--red);}
 
-@media (max-width: 980px){
+/* ===== 탭 항상 수평 스크롤 (잘림 방지) ===== */
+.tabs{overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; flex-wrap:nowrap;}
+.tabs::-webkit-scrollbar{display:none;}
+.tab{white-space:nowrap; flex-shrink:0;}
+
+/* ===== 프로세스 행 컨테이너 수평 스크롤 ===== */
+.panel-body.overflow-x{overflow-x:auto; -webkit-overflow-scrolling:touch;}
+.col-headers, .process-row{min-width:580px;}
+
+/* ===== Rate 바 차트 ===== */
+.rate-bar-row{display:grid; grid-template-columns:180px 1fr 60px; align-items:center; gap:12px;}
+@media (max-width:860px){
+  .rate-bar-row{grid-template-columns:140px 1fr 54px; gap:8px;}
+}
+@media (max-width:640px){
+  .rate-bar-row{grid-template-columns:110px 1fr 48px; gap:6px;}
+  .rate-bar-label{font-size:11px !important;}
+}
+
+/* ===== RESPONSIVE BREAKPOINTS ===== */
+
+/* 1300px — cols-6 를 3열로 */
+@media (max-width:1300px){
+  .kpi-strip.cols-6{grid-template-columns:repeat(3,1fr);}
+}
+
+/* 1080px — 전체 KPI 3열, 패딩 축소 */
+@media (max-width:1080px){
+  .kpi-strip{grid-template-columns:repeat(3,1fr);}
+  .kpi-strip.cols-6{grid-template-columns:repeat(3,1fr);}
+  #content{padding:16px 18px 40px;}
+}
+
+/* 980px — 태블릿 */
+@media (max-width:980px){
   .kpi-strip{grid-template-columns:repeat(2,1fr);}
+  .kpi-strip.cols-3{grid-template-columns:repeat(3,1fr);}
+  .kpi-strip.cols-6{grid-template-columns:repeat(2,1fr);}
   .cpk-layout{grid-template-columns:1fr;}
   #sidebar{position:fixed; z-index:90; box-shadow:var(--shadow-md);}
+  #topbar .sub{display:none;}
+  #content{padding:14px 16px 40px;}
+  .ph-top{flex-wrap:wrap; gap:10px;}
+  .ph-actions{flex-wrap:wrap;}
+  .analysis-toolbar{flex-direction:column; align-items:flex-start; gap:10px;}
+  .cpk-orientation-toggle{flex-wrap:wrap;}
+}
+
+/* 640px — 모바일 */
+@media (max-width:640px){
+  #proj-header{padding:14px 14px 0;}
+  #content{padding:12px 12px 36px;}
+  .kpi-strip{grid-template-columns:repeat(2,1fr);}
+  .kpi-strip.cols-3{grid-template-columns:repeat(2,1fr);}
+  .kpi-strip.cols-6{grid-template-columns:repeat(2,1fr);}
+  .kpi-card .kpi-value{font-size:20px;}
+  .kpi-card .kpi-label{font-size:9.5px;}
+  .kpi-card{padding:10px 12px;}
+  .measure-grid{grid-template-columns:repeat(3,1fr);}
+  .tab{padding:9px 11px; font-size:12px;}
+  .form-grid{grid-template-columns:1fr;}
+  .form-grid.cols-3{grid-template-columns:repeat(2,1fr);}
+  .cycle-input-panel{flex-direction:column;}
+  .ph-title-row h1{font-size:18px;}
+  .panel-head h3{font-size:14px;}
+  .panel-body{padding:12px;}
+  .modal{width:96vw !important; max-height:92vh;}
+  .modal-body{padding:14px;}
+  #topbar{padding:0 10px; gap:8px;}
+  #topbar .brand{font-size:16px;}
 }
 </style>
 </head>
@@ -395,16 +522,23 @@ table.data-table .del-cell:hover{color:var(--red);}
   </button>
   <div class="brand"><span class="tick"></span>RUN&amp;RATE<span class="sub">양산 초기 검증 · CPK 분석</span></div>
   <div class="spacer"></div>
+  <button class="icon-btn" id="btn-export-summary" title="요약 CSV 내보내기">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+  </button>
   <button class="icon-btn" id="btn-export-all" title="전체 백업 내보내기">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
   </button>
   <button class="icon-btn" id="btn-import-all" title="백업 불러오기">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
   </button>
+  <button class="icon-btn" id="btn-sync-refresh" title="동기화 새로고침">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+  </button>
 </div>
 
+<div id="sidebar-overlay"></div>
 <div id="app">
-  <aside id="sidebar">
+  <aside id="sidebar" class="collapsed">
     <div class="sb-header">
       <span>프로젝트 (품번)</span>
       <button class="btn-new-proj" id="btn-new-project">
@@ -458,7 +592,7 @@ table.data-table .del-cell:hover{color:var(--red);}
           <div class="tab" data-tab="process">공정 등록 <span class="badge" id="badge-proc-count">0</span></div>
           <div class="tab" data-tab="analysis">공정별 분석</div>
           <div class="tab" data-tab="cpk">CPK 품질측정</div>
-          <div class="tab" data-tab="history">불량/이력</div>
+          <div class="tab" data-tab="history">Run&amp;Rate 결과</div>
         </div>
       </div>
       <div id="content"></div>

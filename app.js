@@ -457,7 +457,7 @@ function selectProject(id){
   state.activeTab = 'overview';
   document.getElementById('main-empty').style.display='none';
   document.getElementById('proj-view').style.display='flex';
-  document.getElementById('sidebar').classList.add('collapsed');
+  setSidebarOpen(false);
   subscribeProjectDetail(id);
   renderSidebar();
   renderProjectHeader();
@@ -496,6 +496,7 @@ function renderOverview(proj){
   const overallRate = projectOverallRate(proj);
   const bottleneck = findBottleneck(proj);
   const ds = defectSummary(proj, null);
+  const totalManpower = proj.processes.reduce((s,p)=>s+(Number(p.manpower)||0), 0);
   let cpkWorst=null;
   proj.processes.forEach(p=>{
     const c = computeCpkSummary(proj, p.id);
@@ -512,7 +513,7 @@ function renderOverview(proj){
   const defValClass = ds.defectRate===null? '' : ds.defectRate<=1?'good':ds.defectRate<=3?'warn':'bad';
 
   return `
-  <div class="kpi-strip cols-5">
+  <div class="kpi-strip cols-6">
     <div class="kpi-card ${rateStatus}">
       <div class="kpi-label">라인 Rate% (병목기준)</div>
       <div class="kpi-value ${rateValClass}">${overallRate!==null? overallRate : '—'}<span class="kpi-unit">%</span></div>
@@ -538,6 +539,11 @@ function renderOverview(proj){
       <div class="kpi-value">${proj.targetQty? round((ds.totalProduced/proj.targetQty)*100,1)+'%' : '—'}</div>
       <div class="kpi-sub">${proj.targetQty? ds.totalProduced+' / '+proj.targetQty : '목표 미설정'}</div>
     </div>
+    <div class="kpi-card">
+      <div class="kpi-label">공정 투입 인원</div>
+      <div class="kpi-value">${totalManpower}<span class="kpi-unit">명</span></div>
+      <div class="kpi-sub">${proj.processes.length}개 공정 합계</div>
+    </div>
   </div>
 
   <div class="panel">
@@ -545,9 +551,9 @@ function renderOverview(proj){
       <h3>공정별 현황 요약</h3>
       <span class="ph-tag">${proj.processes.length}개 공정</span>
     </div>
-    <div class="panel-body" style="padding:0;">
+    <div class="panel-body overflow-x" style="padding:0;">
       ${proj.processes.length===0 ? `<div class="mini-empty"><div class="ico">⚙</div><p>아직 등록된 공정이 없습니다. "공정 등록" 탭에서 조립 공정을 추가하세요.</p></div>` : `
-      <div class="col-headers"><div></div><div>공정명</div><div>Avg C/T</div><div>UPH</div><div>Rate%</div><div>CPK</div><div></div></div>
+      <div class="col-headers"><div></div><div>공정명</div><div>인원</div><div>Avg C/T</div><div>UPH</div><div>Rate%</div><div>CPK</div><div></div></div>
       ${proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>{
         const r = computeRate(proj, p.id);
         const c = computeCpkSummary(proj, p.id);
@@ -556,6 +562,7 @@ function renderOverview(proj){
         return `<div class="process-row" data-goto-process="${p.id}">
           <div class="proc-num">${p.seq}</div>
           <div class="proc-name">${escapeHtml(p.name)}${p.eq?`<span class="proc-eq">${escapeHtml(p.eq)}</span>`:''}</div>
+          <div class="mono">${p.manpower!=null? p.manpower+'명' : '—'}</div>
           <div class="mono">${r.avgCt!==null? r.avgCt+'초' : '—'}</div>
           <div class="mono">${r.uph!==null? r.uph : '—'}</div>
           <div><span class="rate-pill ${rateClass}">${r.ratePct!==null? r.ratePct+'%' : '—'}</span></div>
@@ -579,7 +586,7 @@ function renderProcessTab(proj){
         공정 추가/수정
       </button>
     </div>
-    <div class="panel-body" style="padding:0;">
+    <div class="panel-body overflow-x" style="padding:0;">
       ${proj.processes.length===0 ? `<div class="mini-empty"><div class="ico">📋</div><p>품번 ${escapeHtml(proj.pn)}의 조립 공정을 등록하세요.<br>예: 1차 압입 → 부품 체결 → 토크 검사 → 외관 검사</p></div>` : `
       <div class="col-headers"><div></div><div>공정명 / 설비</div><div>목표 C/T</div><div>인원</div><div>측정수</div><div>Avg C/T</div><div></div></div>
       ${proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>{
@@ -612,7 +619,8 @@ function renderAnalysisOverallChart(rows){
       const w = r.ratePct===null ? 0 : Math.max(3, Math.min(100, (r.ratePct/maxRate)*100));
       const tone = r.ratePct===null ? '#9CA3AF' : r.ratePct>=100 ? 'var(--green)' : r.ratePct>=90 ? 'var(--amber)' : 'var(--red)';
       return `<div class="rate-bar-row">
-        <div class="rate-bar-label">${escapeHtml(r.label)}</div>
+        <div class="rate-bar-label">${escapeHtml(r.label)}${r.manpower!=null?`<span style="color:var(--gauge-grey);font-size:11px;font-weight:400;margin-left:6px;">${r.manpower}명</span>`:''}
+        </div>
         <div style="height:10px; background:#ECE9E0; border-radius:999px; overflow:hidden;">
           <div style="width:${w}%; height:100%; background:${tone};"></div>
         </div>
@@ -623,12 +631,13 @@ function renderAnalysisOverallChart(rows){
 }
 
 function renderAnalysisAllTab(proj){
+  const bottleneck = findBottleneck(proj);
   const rows = proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>{
     const r = computeRate(proj, p.id);
-    const bottleneck = findBottleneck(proj);
     return {
       id: p.id,
       label: `${p.seq}. ${p.name}`,
+      manpower: p.manpower,
       targetCt: p.targetCt,
       avgCt: r.avgCt,
       uph: r.uph,
@@ -638,18 +647,36 @@ function renderAnalysisAllTab(proj){
   });
   const measured = rows.filter(r=>r.n>0).length;
   const totalSamples = rows.reduce((s,r)=>s+r.n,0);
+  const totalManpower = proj.processes.reduce((s,p)=>s+(Number(p.manpower)||0), 0);
   const avgRate = rows.filter(r=>r.ratePct!==null).length
     ? round(rows.filter(r=>r.ratePct!==null).reduce((s,r)=>s+r.ratePct,0)/rows.filter(r=>r.ratePct!==null).length,1)
     : null;
-  const bottleneck = findBottleneck(proj);
+
+  const bnRate = bottleneck ? computeRate(proj, bottleneck.id) : null;
+  const bnUph = bnRate ? bnRate.uph : null;
+  const dayQty  = bnUph ? Math.floor(bnUph * 8) : null;
+  const weekQty = bnUph ? Math.floor(bnUph * 8 * 5) : null;
+  const monQty  = bnUph ? Math.floor(bnUph * 8 * 22) : null;
 
   return `
-  <div class="kpi-strip cols-5">
+  <div class="kpi-strip cols-6">
     <div class="kpi-card"><div class="kpi-label">등록 공정 수</div><div class="kpi-value">${rows.length}<span class="kpi-unit">개</span></div></div>
     <div class="kpi-card"><div class="kpi-label">측정 완료 공정</div><div class="kpi-value">${measured}<span class="kpi-unit">개</span></div></div>
     <div class="kpi-card"><div class="kpi-label">총 측정 건수</div><div class="kpi-value">${totalSamples}<span class="kpi-unit">건</span></div></div>
     <div class="kpi-card"><div class="kpi-label">공정 평균 Rate</div><div class="kpi-value">${avgRate??'—'}<span class="kpi-unit">%</span></div></div>
+    <div class="kpi-card"><div class="kpi-label">공정 투입 인원</div><div class="kpi-value">${totalManpower}<span class="kpi-unit">명</span></div></div>
     <div class="kpi-card"><div class="kpi-label">병목 공정</div><div class="kpi-value" style="font-size:18px;">${bottleneck?escapeHtml(bottleneck.name):'—'}</div></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h3>병목 기준 생산 가능 수량</h3><span class="ph-tag">${bottleneck?escapeHtml(bottleneck.name)+' 기준':'측정 데이터 필요'}</span></div>
+    <div class="panel-body">
+      <div class="kpi-strip cols-3" style="margin:0;">
+        <div class="kpi-card"><div class="kpi-label">일 생산 가능 (8h)</div><div class="kpi-value">${dayQty!==null?dayQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
+        <div class="kpi-card"><div class="kpi-label">주 생산 가능 (5일)</div><div class="kpi-value">${weekQty!==null?weekQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
+        <div class="kpi-card"><div class="kpi-label">월 생산 가능 (22일)</div><div class="kpi-value">${monQty!==null?monQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
+      </div>
+    </div>
   </div>
 
   <div class="panel">
@@ -661,10 +688,11 @@ function renderAnalysisAllTab(proj){
     <div class="panel-head"><h3>공정별 분석 요약</h3><span class="ph-tag">${rows.length}개 공정</span></div>
     <div class="panel-body" style="padding:0; overflow-x:auto;">
       <table class="data-table">
-        <thead><tr><th>공정</th><th>목표 C/T(초)</th><th>Avg C/T(초)</th><th>UPH</th><th>Rate(%)</th><th>측정건수</th></tr></thead>
+        <thead><tr><th>공정</th><th>인원</th><th>목표 C/T(초)</th><th>Avg C/T(초)</th><th>UPH</th><th>Rate(%)</th><th>측정건수</th></tr></thead>
         <tbody>
         ${rows.map(r=>`<tr class="${bottleneck && bottleneck.id===r.id ? 'bottleneck-row' : ''}">
           <td>${escapeHtml(r.label)}</td>
+          <td>${r.manpower!=null?r.manpower+'명':'—'}</td>
           <td>${r.targetCt??'—'}</td>
           <td>${r.avgCt??'—'}</td>
           <td>${r.uph??'—'}</td>
@@ -1929,8 +1957,23 @@ document.getElementById('btn-save-defect').addEventListener('click', async ()=>{
 });
 
 // ---- Sidebar collapse ----
+function setSidebarOpen(open){
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  if(open){
+    sidebar.classList.remove('collapsed');
+    overlay.style.display = 'block';
+  } else {
+    sidebar.classList.add('collapsed');
+    overlay.style.display = 'none';
+  }
+}
 document.getElementById('btn-toggle-sidebar').addEventListener('click', ()=>{
-  document.getElementById('sidebar').classList.toggle('collapsed');
+  const isCollapsed = document.getElementById('sidebar').classList.contains('collapsed');
+  setSidebarOpen(isCollapsed);
+});
+document.getElementById('sidebar-overlay').addEventListener('click', ()=>{
+  setSidebarOpen(false);
 });
 
 // ---- Backup export/import ----
