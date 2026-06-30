@@ -5,6 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
+const APP_VERSION = 'v13'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -37,13 +38,13 @@ function escapeHtml(s){
   if(s===null||s===undefined) return '';
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
-function toast(msg, type=''){
+function toast(msg, type='', duration=2600){
   const wrap = document.getElementById('toast-wrap');
   const el = document.createElement('div');
   el.className = 'toast' + (type ? ' t-'+type : '');
   el.textContent = msg;
   wrap.appendChild(el);
-  setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(()=>el.remove(), 300); }, 2600);
+  setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(()=>el.remove(), 300); }, duration);
 }
 function setConnStatus(connected){
   const prev = state.connected;
@@ -2148,5 +2149,7 @@ if('serviceWorker' in navigator){
       // 즉시 업데이트 확인
       reg.update().catch(()=>{});
     }catch(_e){}
+    // 현재 실행 중인 버전 안내 (1초 후 자동 사라짐)
+    setTimeout(()=> toast('앱이 최신버전입니다 ('+APP_VERSION+')', 'success', 1000), 600);
   });
 }
