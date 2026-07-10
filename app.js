@@ -84,6 +84,8 @@ function subscribeProjects(){
       return {
         id: d.id,
         pn: data.pn, pname: data.pname,
+        targetCt: data.targetCt ?? null,
+        runRateHours: data.runRateHours ?? null,
         targetUph: data.targetUph ?? null,
         targetQty: data.targetQty ?? null,
         remark: data.remark || '',
@@ -188,6 +190,8 @@ function newProjectData(data){
   return {
     pn: data.pn,
     pname: data.pname,
+    targetCt: data.targetCt || null,
+    runRateHours: data.runRateHours || null,
     targetUph: data.targetUph || null,
     targetQty: data.targetQty || null,
     remark: data.remark || '',
@@ -1445,18 +1449,51 @@ function openProjectModal(proj){
   document.getElementById('modal-project-title').textContent = proj? '프로젝트 수정' : '신규 프로젝트';
   document.getElementById('inp-pn').value = proj? proj.pn : '';
   document.getElementById('inp-pname').value = proj? proj.pname : '';
-  document.getElementById('inp-target-uph').value = proj? (proj.targetUph??'') : '';
-  document.getElementById('inp-target-qty').value = proj? (proj.targetQty??'') : '';
+
+  // 목표 C/T·Run&Rate 시간이 없는 과거 데이터는 기존 목표UPH/목표수량 값을 역산해 채워준다 (값 유실 방지)
+  let ct = proj?.targetCt ?? null;
+  if((ct===null || ct===undefined) && proj?.targetUph) ct = round(3600/Number(proj.targetUph), 2);
+  let hours = proj?.runRateHours ?? null;
+  if((hours===null || hours===undefined) && proj?.targetQty && proj?.targetUph) hours = round(Number(proj.targetQty)/Number(proj.targetUph), 2);
+
+  document.getElementById('inp-target-ct').value = ct ?? '';
+  document.getElementById('inp-runrate-hours').value = hours ?? '';
   document.getElementById('inp-remark').value = proj? (proj.remark??'') : '';
+  updateTargetAutoPreview();
   openModal('modal-project');
 }
+
+function computeTargetFromCtHours(ctVal, hoursVal){
+  const ct = Number(ctVal);
+  const hours = Number(hoursVal);
+  const targetUph = (ct>0) ? round(3600/ct, 1) : null;
+  const targetQty = (targetUph!==null && hours>0) ? round(targetUph*hours, 0) : null;
+  return { targetUph, targetQty };
+}
+
+function updateTargetAutoPreview(){
+  const preview = document.getElementById('target-auto-preview');
+  if(!preview) return;
+  const ctVal = document.getElementById('inp-target-ct').value;
+  const hoursVal = document.getElementById('inp-runrate-hours').value;
+  const { targetUph, targetQty } = computeTargetFromCtHours(ctVal, hoursVal);
+  if(targetUph===null){ preview.textContent = 'UPH — · 수량 —'; return; }
+  preview.textContent = `UPH ${targetUph} · 수량 ${targetQty!==null? targetQty.toLocaleString()+' EA' : '— (시간 입력 필요)'}`;
+}
+['inp-target-ct','inp-runrate-hours'].forEach(id=>{
+  const el = document.getElementById(id);
+  if(el) el.addEventListener('input', updateTargetAutoPreview);
+});
 
 document.getElementById('btn-save-project').addEventListener('click', async ()=>{
   const pn = document.getElementById('inp-pn').value.trim();
   const pname = document.getElementById('inp-pname').value.trim();
   if(!pn || !pname){ toast('품번과 품명은 필수입니다', 'error'); return; }
-  const targetUph = document.getElementById('inp-target-uph').value;
-  const targetQty = document.getElementById('inp-target-qty').value;
+  const targetCtVal = document.getElementById('inp-target-ct').value;
+  const runRateHoursVal = document.getElementById('inp-runrate-hours').value;
+  const targetCt = targetCtVal? Number(targetCtVal) : null;
+  const runRateHours = runRateHoursVal? Number(runRateHoursVal) : null;
+  const { targetUph, targetQty } = computeTargetFromCtHours(targetCtVal, runRateHoursVal);
   const remark = document.getElementById('inp-remark').value.trim();
   const btn = document.getElementById('btn-save-project');
   btn.disabled = true;
@@ -1465,13 +1502,12 @@ document.getElementById('btn-save-project').addEventListener('click', async ()=>
     if(editingProjectId){
       await fb.updateDoc(fb.doc(fb.db, 'projects', editingProjectId), {
         pn, pname,
-        targetUph: targetUph? Number(targetUph): null,
-        targetQty: targetQty? Number(targetQty): null,
+        targetCt, runRateHours, targetUph, targetQty,
         remark
       });
       toast('프로젝트가 수정되었습니다', 'success');
     } else {
-      const docRef = await fb.addDoc(projectsCol(), newProjectData({pn, pname, targetUph: targetUph?Number(targetUph):null, targetQty: targetQty?Number(targetQty):null, remark}));
+      const docRef = await fb.addDoc(projectsCol(), newProjectData({pn, pname, targetCt, runRateHours, targetUph, targetQty, remark}));
       state.activeProjectId = docRef.id;
       toast('신규 프로젝트가 생성되었습니다', 'success');
     }

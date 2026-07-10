@@ -601,16 +601,21 @@ table.data-table .del-cell:hover{color:var(--red);}
           <input type="text" id="inp-pname" placeholder="예: 프론트 브라켓 ASSY">
         </div>
       </div>
-      <div class="form-grid" style="margin-top:14px;">
+      <div class="form-grid cols-3" style="margin-top:14px;">
         <div class="field">
-          <label>목표 UPH (시간당 생산량)</label>
-          <input type="number" id="inp-target-uph" class="mono" placeholder="예: 120">
+          <label>목표 C/T (초)</label>
+          <input type="number" step="any" id="inp-target-ct" class="mono" placeholder="예: 30">
         </div>
         <div class="field">
-          <label>목표 양산 수량</label>
-          <input type="number" id="inp-target-qty" class="mono" placeholder="예: 5000">
+          <label>Run&amp;Rate 시간 (h)</label>
+          <input type="number" step="any" id="inp-runrate-hours" class="mono" placeholder="예: 8">
+        </div>
+        <div class="field">
+          <label>자동계산 (UPH · 수량)</label>
+          <div id="target-auto-preview" class="mono" style="padding:9px 11px; border:1px solid var(--line); border-radius:6px; background:#F8F7F3; font-size:12.5px; color:var(--ink-soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">UPH — · 수량 —</div>
         </div>
       </div>
+      <div style="margin-top:6px; font-size:10.5px; color:var(--gauge-grey); line-height:1.5;">목표 C/T와 Run&amp;Rate 시간을 입력하면 목표 UPH·목표 양산 수량이 자동으로 계산되어 저장됩니다. (목표 UPH = 3600 ÷ C/T, 목표 수량 = UPH × 시간)</div>
       <div class="field" style="margin-top:14px;">
         <label>비고</label>
         <textarea id="inp-remark" rows="2" placeholder="라인명, 고객사, 특이사항 등"></textarea>
