@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v13'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v14'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
