@@ -88,6 +88,12 @@ function subscribeProjects(){
         targetQty: data.targetQty ?? null,
         remark: data.remark || '',
         createdAt: data.createdAt || nowISO(),
+        // 프로젝트 문서 자체에 저장되는 요약/설정 필드 (서브컬렉션을 열지 않아도 목록에서 정확히 표시)
+        procCount: data.procCount ?? 0,
+        capHoursPerDay: data.capHoursPerDay ?? 8,
+        capDaysPerWeek: data.capDaysPerWeek ?? 5,
+        capDaysPerMonth: data.capDaysPerMonth ?? 22,
+        qualityOverrides: data.qualityOverrides || {},
         // 상세 서브컬렉션은 별도 리스너가 채움. 기존 값 보존(프로젝트 목록 갱신 시 상세 날아가지 않게).
         processes: existing? existing.processes : [],
         cycles: existing? existing.cycles : {},
@@ -123,6 +129,12 @@ function subscribeProjectDetail(pid){
     const proj = getProject(pid);
     if(!proj) return;
     proj.processes = snap.docs.map(d=> ({ id:d.id, ...d.data() }));
+    // 목록(사이드바)의 "공정 N개"는 이 프로젝트를 열기 전엔 procCount 필드로만 표시됨.
+    // 실제 공정 수와 어긋나 있으면(과거 데이터 등) 여기서 자동 보정한다.
+    if(proj.procCount !== proj.processes.length){
+      proj.procCount = proj.processes.length;
+      fb.updateDoc(fb.doc(fb.db, 'projects', pid), { procCount: proj.processes.length }).catch(()=>{});
+    }
     if(document.getElementById('proj-view').style.display !== 'none'){
       renderProjectHeader(); renderContent(); renderSidebar();
     }
@@ -308,13 +320,18 @@ function defectSummary(proj, processId){
 }
 
 function processDefectSummaryList(proj){
+  const overrides = proj.qualityOverrides || {};
   return proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>{
     const list = proj.defects.filter(d=>d.processId===p.id);
-    const produced = list.reduce((m,d)=>{
+    const autoProduced = list.reduce((m,d)=>{
       const v = Number(d.total);
       return (isNaN(v) || v < 0) ? m : Math.max(m, v);
     }, 0);
-    const defect = list.reduce((s,d)=>s+Number(d.qty||0),0);
+    const autoDefect = list.reduce((s,d)=>s+Number(d.qty||0),0);
+    const ov = overrides[p.id];
+    const overridden = !!ov;
+    const produced = overridden ? Math.max(0, Number(ov.produced)||0) : autoProduced;
+    const defect = overridden ? Math.max(0, Number(ov.defect)||0) : autoDefect;
     const good = Math.max(produced - defect, 0);
     const defectRate = produced>0 ? round((defect/produced)*100,3) : null;
     const yieldRate = produced>0 ? round((good/produced)*100,3) : null;
@@ -325,6 +342,7 @@ function processDefectSummaryList(proj){
       processId: p.id,
       seq: p.seq,
       name: p.name,
+      overridden,
       produced,
       good,
       defect,
@@ -441,7 +459,7 @@ function renderSidebar(){
       <div class="pn">${escapeHtml(p.pn)}</div>
       <div class="pname">${escapeHtml(p.pname)}</div>
       <div class="pmeta">
-        <span>공정 ${p.processes.length}개</span>
+        <span>공정 ${p.procCount}개</span>
         <span class="chip ${chipClass}">${chipLabel}</span>
       </div>
     </div>`;
@@ -655,9 +673,12 @@ function renderAnalysisAllTab(proj){
 
   const bnRate = bottleneck ? computeRate(proj, bottleneck.id) : null;
   const bnUph = bnRate ? bnRate.uph : null;
-  const dayQty  = bnUph ? Math.floor(bnUph * 8) : null;
-  const weekQty = bnUph ? Math.floor(bnUph * 8 * 5) : null;
-  const monQty  = bnUph ? Math.floor(bnUph * 8 * 22) : null;
+  const capH = Number(proj.capHoursPerDay) || 8;
+  const capW = Number(proj.capDaysPerWeek) || 5;
+  const capM = Number(proj.capDaysPerMonth) || 22;
+  const dayQty  = bnUph ? Math.floor(bnUph * capH) : null;
+  const weekQty = bnUph ? Math.floor(bnUph * capH * capW) : null;
+  const monQty  = bnUph ? Math.floor(bnUph * capH * capM) : null;
 
   return `
   <div class="kpi-strip cols-6">
@@ -672,10 +693,41 @@ function renderAnalysisAllTab(proj){
   <div class="panel">
     <div class="panel-head"><h3>병목 기준 생산 가능 수량</h3><span class="ph-tag">${bottleneck?escapeHtml(bottleneck.name)+' 기준':'측정 데이터 필요'}</span></div>
     <div class="panel-body">
+      <div class="cap-settings-row" style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end; margin-bottom:16px; padding-bottom:16px; border-bottom:1px solid var(--line);">
+        <div class="field" style="max-width:150px;">
+          <label>일 가동시간(h)</label>
+          <input type="number" id="cap-hours-per-day" class="mono" min="1" max="24" step="0.5" value="${capH}">
+          <div style="display:flex; gap:4px; margin-top:5px; flex-wrap:wrap;">
+            <div class="proc-chip" data-cap-hours="8" style="padding:3px 9px; font-size:11px;">8h</div>
+            <div class="proc-chip" data-cap-hours="10" style="padding:3px 9px; font-size:11px;">10h</div>
+            <div class="proc-chip" data-cap-hours="12" style="padding:3px 9px; font-size:11px;">12h</div>
+            <div class="proc-chip" data-cap-hours="24" style="padding:3px 9px; font-size:11px;">24h(3교대)</div>
+          </div>
+        </div>
+        <div class="field" style="max-width:150px;">
+          <label>주 가동일수(일)</label>
+          <input type="number" id="cap-days-per-week" class="mono" min="1" max="7" step="1" value="${capW}">
+          <div style="display:flex; gap:4px; margin-top:5px; flex-wrap:wrap;">
+            <div class="proc-chip" data-cap-week="5" style="padding:3px 9px; font-size:11px;">5일</div>
+            <div class="proc-chip" data-cap-week="6" style="padding:3px 9px; font-size:11px;">6일</div>
+            <div class="proc-chip" data-cap-week="7" style="padding:3px 9px; font-size:11px;">7일(연속가동)</div>
+          </div>
+        </div>
+        <div class="field" style="max-width:150px;">
+          <label>월 가동일수(일)</label>
+          <input type="number" id="cap-days-per-month" class="mono" min="1" max="31" step="1" value="${capM}">
+          <div style="display:flex; gap:4px; margin-top:5px; flex-wrap:wrap;">
+            <div class="proc-chip" data-cap-month="22" style="padding:3px 9px; font-size:11px;">22일</div>
+            <div class="proc-chip" data-cap-month="26" style="padding:3px 9px; font-size:11px;">26일</div>
+            <div class="proc-chip" data-cap-month="30" style="padding:3px 9px; font-size:11px;">30일(교대연속)</div>
+          </div>
+        </div>
+        <button class="btn btn-sm btn-primary" id="btn-save-capacity-settings" style="margin-bottom:1px;">가동 조건 저장</button>
+      </div>
       <div class="kpi-strip cols-3" style="margin:0;">
-        <div class="kpi-card"><div class="kpi-label">일 생산 가능 (8h)</div><div class="kpi-value">${dayQty!==null?dayQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
-        <div class="kpi-card"><div class="kpi-label">주 생산 가능 (5일)</div><div class="kpi-value">${weekQty!==null?weekQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
-        <div class="kpi-card"><div class="kpi-label">월 생산 가능 (22일)</div><div class="kpi-value">${monQty!==null?monQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
+        <div class="kpi-card"><div class="kpi-label">일 생산 가능 (${capH}h)</div><div class="kpi-value">${dayQty!==null?dayQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
+        <div class="kpi-card"><div class="kpi-label">주 생산 가능 (${capW}일)</div><div class="kpi-value">${weekQty!==null?weekQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
+        <div class="kpi-card"><div class="kpi-label">월 생산 가능 (${capM}일)</div><div class="kpi-value">${monQty!==null?monQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
       </div>
     </div>
   </div>
@@ -1071,20 +1123,31 @@ function renderHistoryTab(proj){
     <div class="panel-body" style="padding:0; overflow-x:auto; -webkit-overflow-scrolling:touch;">
       ${procRows.length===0 ? `<div class="mini-empty"><p>등록된 공정이 없습니다.</p></div>` : `
       <table class="data-table">
-        <thead><tr><th>공정</th><th>생산수량(EA)</th><th>양품수량(EA)</th><th>불량수량(EA)</th><th>불량률(%)</th><th>수율(%)</th><th>Rate%(RunRate)</th><th>목표대비 진척률(%)</th></tr></thead>
+        <thead><tr><th>공정</th><th>생산수량(EA)</th><th>양품수량(EA)</th><th>불량수량(EA)</th><th>불량률(%)</th><th>수율(%)</th><th>Rate%(RunRate)</th><th>목표대비 진척률(%)</th><th></th></tr></thead>
         <tbody>
         ${procRows.map(r=>`<tr>
-          <td>${r.seq}. ${escapeHtml(r.name)}</td>
-          <td>${r.produced}</td>
+          <td>${r.seq}. ${escapeHtml(r.name)}${r.overridden?' <span class="ph-tag" style="font-size:9px; vertical-align:middle;">수동입력</span>':''}</td>
+          <td><input type="number" min="0" step="1" class="qd-input ${r.overridden?'qd-overridden':''}" data-qd-field="produced" data-qd-process="${r.processId}" value="${r.produced}"></td>
           <td>${r.good}</td>
-          <td>${r.defect}</td>
+          <td><input type="number" min="0" step="1" class="qd-input ${r.overridden?'qd-overridden':''}" data-qd-field="defect" data-qd-process="${r.processId}" value="${r.defect}"></td>
           <td>${r.defectRate??'—'}</td>
           <td>${r.yieldRate??'—'}</td>
           <td>${r.ratePct??'—'}</td>
           <td>${r.progressPct===null ? '—' : `<span class="rate-pill ${r.progressPct>=100 ? 'chip-green' : r.progressPct>=80 ? 'chip-amber' : 'chip-red'}">${r.progressPct}%</span>`}</td>
+          <td>
+            <div style="display:flex; gap:4px;">
+              <div class="icon-mini" data-save-quality="${r.processId}" title="입력한 값으로 저장">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
+              ${r.overridden?`<div class="icon-mini" data-reset-quality="${r.processId}" title="불량 이력 기준 자동계산으로 되돌리기">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+              </div>`:''}
+            </div>
+          </td>
         </tr>`).join('')}
         </tbody>
-      </table>`}
+      </table>
+      <p style="font-size:11px; color:var(--gauge-grey); padding:10px 14px;">생산수량·불량수량은 기본적으로 아래 "불량 이력"의 총생산수량(total) 기준으로 자동 계산됩니다. 값을 직접 입력하고 체크(✓)로 저장하면 해당 공정은 수동 입력값으로 고정되며, 되돌리기(↺)로 자동계산으로 복원할 수 있습니다.</p>`}
     </div>
   </div>
 
@@ -1247,7 +1310,7 @@ function exportDefectsCSV(proj){
     rows.push([i+1, fmtDate(d.ts), proc?proc.name:'', d.type, d.qty, d.total??'', d.remark??'']);
   });
   rows.push([]);
-  rows.push(['비고', '공정별 품질 상세는 불량 기록의 총생산수량(total) 기준으로 계산됩니다.']);
+  rows.push(['비고', '공정별 품질 상세는 불량 기록의 총생산수량(total) 기준으로 자동 계산되며, 화면에서 직접 값을 입력해 수동으로 고정할 수 있습니다.']);
   downloadCSV(`RunRate_${proj.pn}_결과이력_${fmtDateShort(nowISO())}.csv`, rows);
 }
 
@@ -1468,6 +1531,8 @@ async function deleteProcessDeep(pid, processId){
   defSnap.docs.filter(d=> d.data().processId===processId).forEach(d=> batch.delete(d.ref));
   batch.delete(fb.doc(cpkCol(pid), processId));
   batch.delete(fb.doc(processesCol(pid), processId));
+  const proj = getProject(pid);
+  if(proj) batch.update(fb.doc(fb.db, 'projects', pid), { procCount: Math.max(0, proj.processes.length - 1) });
   await batch.commit();
 }
 
@@ -1549,6 +1614,8 @@ document.getElementById('btn-save-process').addEventListener('click', async ()=>
     existing.filter(e=>!usedIds.has(e.id)).forEach(e=>{
       batch.delete(fb.doc(processesCol(proj.id), e.id));
     });
+    // 사이드바 "공정 N개" 표시를 위해 프로젝트 문서에도 공정 수를 즉시 반영
+    batch.update(fb.doc(fb.db, 'projects', proj.id), { procCount: names.length });
 
     await batch.commit();
     closeModal('modal-process');
@@ -1595,6 +1662,28 @@ function attachContentEvents(proj){
   // analysis tab
   document.querySelectorAll('[data-select-process]').forEach(el=>{
     el.addEventListener('click', ()=>{ state.activeProcessId = el.dataset.selectProcess; renderContent(); });
+  });
+  // 병목 기준 생산 가능 수량 - 가동 조건(일 가동시간/주·월 가동일수) 프리셋 버튼
+  document.querySelectorAll('[data-cap-hours]').forEach(el=>{
+    el.addEventListener('click', ()=>{ const inp = document.getElementById('cap-hours-per-day'); if(inp) inp.value = el.dataset.capHours; });
+  });
+  document.querySelectorAll('[data-cap-week]').forEach(el=>{
+    el.addEventListener('click', ()=>{ const inp = document.getElementById('cap-days-per-week'); if(inp) inp.value = el.dataset.capWeek; });
+  });
+  document.querySelectorAll('[data-cap-month]').forEach(el=>{
+    el.addEventListener('click', ()=>{ const inp = document.getElementById('cap-days-per-month'); if(inp) inp.value = el.dataset.capMonth; });
+  });
+  const saveCapBtn = document.getElementById('btn-save-capacity-settings');
+  if(saveCapBtn) saveCapBtn.addEventListener('click', async ()=>{
+    const h = Number(document.getElementById('cap-hours-per-day').value) || 8;
+    const w = Number(document.getElementById('cap-days-per-week').value) || 5;
+    const m = Number(document.getElementById('cap-days-per-month').value) || 22;
+    try{
+      await fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { capHoursPerDay:h, capDaysPerWeek:w, capDaysPerMonth:m });
+      proj.capHoursPerDay = h; proj.capDaysPerWeek = w; proj.capDaysPerMonth = m;
+      toast('가동 조건이 저장되었습니다', 'success');
+      renderContent();
+    }catch(e){ toast('저장 실패: '+e.message, 'error'); }
   });
   const timerBtn = document.getElementById('btn-timer-toggle');
   if(timerBtn) timerBtn.addEventListener('click', ()=> toggleTimer(proj));
@@ -1777,6 +1866,35 @@ function attachContentEvents(proj){
   });
 
   // history tab
+  // 공정별 품질 상세 - 생산수량/불량수량 직접 수정
+  document.querySelectorAll('[data-save-quality]').forEach(el=>{
+    el.addEventListener('click', async ()=>{
+      const pid = el.dataset.saveQuality;
+      const producedInp = document.querySelector(`[data-qd-field="produced"][data-qd-process="${pid}"]`);
+      const defectInp = document.querySelector(`[data-qd-field="defect"][data-qd-process="${pid}"]`);
+      const produced = Math.max(0, Math.round(Number(producedInp.value) || 0));
+      const defect = Math.max(0, Math.round(Number(defectInp.value) || 0));
+      if(defect > produced){ toast('불량수량이 생산수량보다 클 수 없습니다', 'error'); return; }
+      try{
+        await fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { [`qualityOverrides.${pid}`]: { produced, defect } });
+        proj.qualityOverrides = proj.qualityOverrides || {};
+        proj.qualityOverrides[pid] = { produced, defect };
+        toast('공정별 품질 상세가 수정되었습니다', 'success');
+        renderContent();
+      }catch(e){ toast('저장 실패: '+e.message, 'error'); }
+    });
+  });
+  document.querySelectorAll('[data-reset-quality]').forEach(el=>{
+    el.addEventListener('click', async ()=>{
+      const pid = el.dataset.resetQuality;
+      try{
+        await fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { [`qualityOverrides.${pid}`]: fb.deleteField() });
+        if(proj.qualityOverrides) delete proj.qualityOverrides[pid];
+        toast('자동계산 값으로 되돌렸습니다', 'success');
+        renderContent();
+      }catch(e){ toast('초기화 실패: '+e.message, 'error'); }
+    });
+  });
   const openDefectBtn = document.getElementById('btn-open-defect-modal');
   if(openDefectBtn) openDefectBtn.addEventListener('click', ()=> openDefectModal(proj, null));
   document.querySelectorAll('[data-edit-defect]').forEach(el=>{
@@ -1890,6 +2008,8 @@ function toggleTimer(proj){
     state.timer.startTs = Date.now();
     display.classList.add('running');
     btn.textContent = '측정 중지';
+    btn.classList.remove('btn-primary');
+    btn.classList.add('btn-danger');
     lapBtn.disabled = false;
     state.timer.intervalId = setInterval(()=>{
       const elapsed = (Date.now() - state.timer.startTs)/1000;
@@ -1902,6 +2022,8 @@ function toggleTimer(proj){
     clearInterval(state.timer.intervalId);
     if(display){ display.classList.remove('running'); display.textContent = '00.0'; }
     btn.textContent = '측정 시작';
+    btn.classList.remove('btn-danger');
+    btn.classList.add('btn-primary');
     lapBtn.disabled = true;
     document.removeEventListener('keydown', timerEnterHandler);
   }

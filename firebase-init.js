@@ -15,7 +15,7 @@ import {
   addDoc, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
   onSnapshot, query, orderBy,
   serverTimestamp, writeBatch,
-  arrayUnion, arrayRemove
+  arrayUnion, arrayRemove, deleteField
 } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -55,7 +55,7 @@ window.__firebase = {
   getDocsCompat: getDocs,
   onSnapshot, query, orderBy,
   serverTimestamp, writeBatch,
-  arrayUnion, arrayRemove
+  arrayUnion, arrayRemove, deleteField
 };
 
 // app.js가 이 신호를 기다렸다가 초기화를 시작함
