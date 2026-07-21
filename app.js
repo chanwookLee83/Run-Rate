@@ -95,6 +95,7 @@ function subscribeProjects(){
         capHoursPerDay: data.capHoursPerDay ?? 8,
         capDaysPerWeek: data.capDaysPerWeek ?? 5,
         capDaysPerMonth: data.capDaysPerMonth ?? 22,
+        capEfficiencyPct: data.capEfficiencyPct ?? 100,
         qualityOverrides: data.qualityOverrides || {},
         // 상세 서브컬렉션은 별도 리스너가 채움. 기존 값 보존(프로젝트 목록 갱신 시 상세 날아가지 않게).
         processes: existing? existing.processes : [],
@@ -680,9 +681,11 @@ function renderAnalysisAllTab(proj){
   const capH = Number(proj.capHoursPerDay) || 8;
   const capW = Number(proj.capDaysPerWeek) || 5;
   const capM = Number(proj.capDaysPerMonth) || 22;
-  const dayQty  = bnUph ? Math.floor(bnUph * capH) : null;
-  const weekQty = bnUph ? Math.floor(bnUph * capH * capW) : null;
-  const monQty  = bnUph ? Math.floor(bnUph * capH * capM) : null;
+  const capEff = Number(proj.capEfficiencyPct) || 100;
+  const effRatio = Math.max(0, Math.min(100, capEff)) / 100;
+  const dayQty  = bnUph ? Math.floor(bnUph * capH * effRatio) : null;
+  const weekQty = bnUph ? Math.floor(bnUph * capH * capW * effRatio) : null;
+  const monQty  = bnUph ? Math.floor(bnUph * capH * capM * effRatio) : null;
 
   return `
   <div class="kpi-strip cols-6">
@@ -726,12 +729,22 @@ function renderAnalysisAllTab(proj){
             <div class="proc-chip" data-cap-month="30" style="padding:3px 9px; font-size:11px;">30일(교대연속)</div>
           </div>
         </div>
+        <div class="field" style="max-width:150px;">
+          <label>설비 효율(%)</label>
+          <input type="number" id="cap-efficiency" class="mono" min="1" max="100" step="1" value="${capEff}">
+          <div style="display:flex; gap:4px; margin-top:5px; flex-wrap:wrap;">
+            <div class="proc-chip" data-cap-eff="85" style="padding:3px 9px; font-size:11px;">85%</div>
+            <div class="proc-chip" data-cap-eff="90" style="padding:3px 9px; font-size:11px;">90%</div>
+            <div class="proc-chip" data-cap-eff="95" style="padding:3px 9px; font-size:11px;">95%</div>
+            <div class="proc-chip" data-cap-eff="100" style="padding:3px 9px; font-size:11px;">100%</div>
+          </div>
+        </div>
         <button class="btn btn-sm btn-primary" id="btn-save-capacity-settings" style="margin-bottom:1px;">가동 조건 저장</button>
       </div>
       <div class="kpi-strip cols-3" style="margin:0;">
-        <div class="kpi-card"><div class="kpi-label">일 생산 가능 (${capH}h)</div><div class="kpi-value">${dayQty!==null?dayQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
-        <div class="kpi-card"><div class="kpi-label">주 생산 가능 (${capW}일)</div><div class="kpi-value">${weekQty!==null?weekQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
-        <div class="kpi-card"><div class="kpi-label">월 생산 가능 (${capM}일)</div><div class="kpi-value">${monQty!==null?monQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
+        <div class="kpi-card"><div class="kpi-label">일 생산 가능 (${capH}h, 효율${capEff}%)</div><div class="kpi-value">${dayQty!==null?dayQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
+        <div class="kpi-card"><div class="kpi-label">주 생산 가능 (${capW}일, 효율${capEff}%)</div><div class="kpi-value">${weekQty!==null?weekQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
+        <div class="kpi-card"><div class="kpi-label">월 생산 가능 (${capM}일, 효율${capEff}%)</div><div class="kpi-value">${monQty!==null?monQty.toLocaleString():'—'}<span class="kpi-unit">EA</span></div></div>
       </div>
     </div>
   </div>
@@ -1709,17 +1722,22 @@ function attachContentEvents(proj){
   document.querySelectorAll('[data-cap-month]').forEach(el=>{
     el.addEventListener('click', ()=>{ const inp = document.getElementById('cap-days-per-month'); if(inp) inp.value = el.dataset.capMonth; });
   });
+  document.querySelectorAll('[data-cap-eff]').forEach(el=>{
+    el.addEventListener('click', ()=>{ const inp = document.getElementById('cap-efficiency'); if(inp) inp.value = el.dataset.capEff; });
+  });
   const saveCapBtn = document.getElementById('btn-save-capacity-settings');
   if(saveCapBtn) saveCapBtn.addEventListener('click', async ()=>{
     const h = Number(document.getElementById('cap-hours-per-day').value) || 8;
     const w = Number(document.getElementById('cap-days-per-week').value) || 5;
     const m = Number(document.getElementById('cap-days-per-month').value) || 22;
+    const effInput = document.getElementById('cap-efficiency');
+    const eff = Math.max(1, Math.min(100, Number(effInput.value) || 100));
     try{
-      await fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { capHoursPerDay:h, capDaysPerWeek:w, capDaysPerMonth:m });
-      proj.capHoursPerDay = h; proj.capDaysPerWeek = w; proj.capDaysPerMonth = m;
+      await fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { capHoursPerDay:h, capDaysPerWeek:w, capDaysPerMonth:m, capEfficiencyPct:eff });
+      proj.capHoursPerDay = h; proj.capDaysPerWeek = w; proj.capDaysPerMonth = m; proj.capEfficiencyPct = eff;
       toast('가동 조건이 저장되었습니다', 'success');
       renderContent();
-    }catch(e){ toast('저장 실패: '+e.message, 'error'); }
+    }catch(err){ toast('저장 실패: '+err.message, 'error'); }
   });
   const timerBtn = document.getElementById('btn-timer-toggle');
   if(timerBtn) timerBtn.addEventListener('click', ()=> toggleTimer(proj));
