@@ -1300,7 +1300,9 @@ function exportAnalysisSummaryCSV(proj){
   out.push([]);
 
   csvSection(out, '병목 기준 생산 가능 수량');
-  out.push(['일 가동시간(h)', capH, '주 가동일수(일)', capW, '월 가동일수(일)', capM, '설비 효율(%)', capEff]);
+  out.push(['일 가동시간(h)', '주 가동일수(일)', '월 가동일수(일)', '설비 효율(%)']);
+  out.push([capH, capW, capM, capEff]);
+  out.push([]);
   out.push([`일 생산 가능(${capH}h, 효율${capEff}%)`, dayQty!==null?dayQty.toLocaleString():'—', 'EA']);
   out.push([`주 생산 가능(${capW}일, 효율${capEff}%)`, weekQty!==null?weekQty.toLocaleString():'—', 'EA']);
   out.push([`월 생산 가능(${capM}일, 효율${capEff}%)`, monQty!==null?monQty.toLocaleString():'—', 'EA']);
