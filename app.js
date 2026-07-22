@@ -805,10 +805,6 @@ function renderAnalysisTab(proj){
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         생산가능수량/분석요약 CSV
       </button>
-      <button class="btn btn-sm" id="btn-export-cycles">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        CSV 다운로드
-      </button>
     </div>
     ${renderAnalysisAllTab(proj)}`;
   }
@@ -1262,28 +1258,6 @@ function exportCyclesCSV(proj, proc){
   rows.push([]);
   rows.push(['비고', 'Rate(%) = 목표 C/T ÷ 실측 평균 C/T × 100']);
   downloadCSV(`RunRate_${proj.pn}_${proc.name}_사이클타임_${fmtDateShort(nowISO())}.csv`, rows);
-}
-
-function exportAllCyclesCSV(proj){
-  const rows = csvReportHeader('RUN&RATE 전체 공정 사이클타임 리포트', proj);
-  csvSection(rows, '공정별 측정 상세');
-  rows.push(['공정','No','측정시각','사이클타임(초)']);
-  proj.processes.slice().sort((a,b)=>a.seq-b.seq).forEach(p=>{
-    const cycles = getCycles(proj, p.id);
-    if(cycles.length===0){
-      rows.push([`${p.seq}. ${p.name}`,'—','—','—']);
-      return;
-    }
-    cycles.forEach((c,i)=> rows.push([`${p.seq}. ${p.name}`, i+1, fmtDate(c.ts), c.ct]));
-  });
-  rows.push([]);
-  csvSection(rows, '공정별 요약');
-  rows.push(['공정','목표 C/T(초)','평균 C/T(초)','UPH','Rate(%)','측정건수']);
-  proj.processes.slice().sort((a,b)=>a.seq-b.seq).forEach(p=>{
-    const r = computeRate(proj, p.id);
-    rows.push([`${p.seq}. ${p.name}`, p.targetCt??'—', r.avgCt??'—', r.uph??'—', r.ratePct??'—', r.n]);
-  });
-  downloadCSV(`RunRate_${proj.pn}_전체공정_사이클타임_${fmtDateShort(nowISO())}.csv`, rows);
 }
 
 function exportAnalysisSummaryCSV(proj){
@@ -1810,10 +1784,6 @@ function attachContentEvents(proj){
   });
   const expCyclesBtn = document.getElementById('btn-export-cycles');
   if(expCyclesBtn) expCyclesBtn.addEventListener('click', ()=>{
-    if(state.activeProcessId === '__all__'){
-      exportAllCyclesCSV(proj);
-      return;
-    }
     const proc = proj.processes.find(p=>p.id===state.activeProcessId);
     if(proc) exportCyclesCSV(proj, proc);
   });
