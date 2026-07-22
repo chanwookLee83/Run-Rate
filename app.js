@@ -654,12 +654,14 @@ function renderAnalysisOverallChart(rows){
   </div>`;
 }
 
-function renderAnalysisAllTab(proj){
+function computeAnalysisAllData(proj){
   const bottleneck = findBottleneck(proj);
   const rows = proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>{
     const r = computeRate(proj, p.id);
     return {
       id: p.id,
+      seq: p.seq,
+      name: p.name,
       label: `${p.seq}. ${p.name}`,
       manpower: p.manpower,
       targetCt: p.targetCt,
@@ -686,6 +688,12 @@ function renderAnalysisAllTab(proj){
   const dayQty  = bnUph ? Math.floor(bnUph * capH * effRatio) : null;
   const weekQty = bnUph ? Math.floor(bnUph * capH * capW * effRatio) : null;
   const monQty  = bnUph ? Math.floor(bnUph * capH * capM * effRatio) : null;
+
+  return { rows, measured, totalSamples, totalManpower, avgRate, bottleneck, bnUph, capH, capW, capM, capEff, dayQty, weekQty, monQty };
+}
+
+function renderAnalysisAllTab(proj){
+  const { rows, measured, totalSamples, totalManpower, avgRate, bottleneck, capH, capW, capM, capEff, dayQty, weekQty, monQty } = computeAnalysisAllData(proj);
 
   return `
   <div class="kpi-strip cols-6">
@@ -793,6 +801,10 @@ function renderAnalysisTab(proj){
         <div class="proc-chip active" data-select-process="__all__">전체</div>
         ${proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>`<div class="proc-chip" data-select-process="${p.id}">${p.seq}. ${escapeHtml(p.name)}</div>`).join('')}
       </div>
+      <button class="btn btn-sm" id="btn-export-analysis-summary">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        생산가능수량/분석요약 CSV
+      </button>
       <button class="btn btn-sm" id="btn-export-cycles">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         CSV 다운로드
@@ -1272,6 +1284,40 @@ function exportAllCyclesCSV(proj){
     rows.push([`${p.seq}. ${p.name}`, p.targetCt??'—', r.avgCt??'—', r.uph??'—', r.ratePct??'—', r.n]);
   });
   downloadCSV(`RunRate_${proj.pn}_전체공정_사이클타임_${fmtDateShort(nowISO())}.csv`, rows);
+}
+
+function exportAnalysisSummaryCSV(proj){
+  const { rows, measured, totalSamples, totalManpower, avgRate, bottleneck, capH, capW, capM, capEff, dayQty, weekQty, monQty } = computeAnalysisAllData(proj);
+  const out = csvReportHeader('RUN&RATE 공정별 분석 요약 리포트', proj);
+
+  csvSection(out, '요약');
+  out.push(['등록 공정 수', rows.length]);
+  out.push(['측정 완료 공정 수', measured]);
+  out.push(['총 측정 건수', totalSamples]);
+  out.push(['공정 평균 Rate(%)', avgRate??'—']);
+  out.push(['공정 투입 인원', totalManpower]);
+  out.push(['병목 공정', bottleneck?bottleneck.name:'—']);
+  out.push([]);
+
+  csvSection(out, '병목 기준 생산 가능 수량');
+  out.push(['일 가동시간(h)', capH, '주 가동일수(일)', capW, '월 가동일수(일)', capM, '설비 효율(%)', capEff]);
+  out.push([`일 생산 가능(${capH}h, 효율${capEff}%)`, dayQty!==null?dayQty:'—', 'EA']);
+  out.push([`주 생산 가능(${capW}일, 효율${capEff}%)`, weekQty!==null?weekQty:'—', 'EA']);
+  out.push([`월 생산 가능(${capM}일, 효율${capEff}%)`, monQty!==null?monQty:'—', 'EA']);
+  out.push([]);
+
+  csvSection(out, '공정별 분석 요약');
+  out.push(['공정','인원','목표 C/T(초)','Avg C/T(초)','UPH','Rate(%)','측정건수']);
+  rows.forEach(r=> out.push([
+    r.label,
+    r.manpower!=null?r.manpower:'—',
+    r.targetCt??'—',
+    r.avgCt??'—',
+    r.uph??'—',
+    r.ratePct??'—',
+    r.n
+  ]));
+  downloadCSV(`RunRate_${proj.pn}_공정별분석요약_${fmtDateShort(nowISO())}.csv`, out);
 }
 
 function exportCpkCSV(proj, proc){
@@ -1769,6 +1815,8 @@ function attachContentEvents(proj){
     const proc = proj.processes.find(p=>p.id===state.activeProcessId);
     if(proc) exportCyclesCSV(proj, proc);
   });
+  const expAnalysisSummaryBtn = document.getElementById('btn-export-analysis-summary');
+  if(expAnalysisSummaryBtn) expAnalysisSummaryBtn.addEventListener('click', ()=> exportAnalysisSummaryCSV(proj));
 
   // cpk tab
   document.querySelectorAll('[data-select-cpk-process]').forEach(el=>{
