@@ -13,7 +13,7 @@ let state = {
   cpkProcessId: null,         // CPK 탭에서 선택된 공정
   cpkInputMode: 'raw',        // 'raw' (개별측정값) | 'stats' (통계값직접입력)
   timer: { running:false, startTs:0, intervalId:null },
-  oprCalc: { plannedMin: null, stopMin: null }, // 개요 탭 가동률 계산기 입력값 (세션 내 유지, 저장 안 함)
+  oprCalc: { mode: 'time', plannedMin: null, stopMin: null, qty: null, actualCt: null, runMin: null }, // 개요 탭 가동률 계산기 입력값 (세션 내 유지, 저장 안 함)
   connected: false,
   unsubProjects: null,
   unsubDetail: []            // 활성 프로젝트의 서브컬렉션 리스너들 (전환 시 해제)
@@ -39,12 +39,21 @@ function escapeHtml(s){
   if(s===null||s===undefined) return '';
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
-function computeOperatingRate(plannedMin, stopMin){
+function computeOperatingRateByTime(plannedMin, stopMin){
   const planned = Number(plannedMin);
   const stop = Number(stopMin) || 0;
   if(!planned || planned<=0) return { actualMin:null, ratePct:null };
   const actualMin = Math.max(0, round(planned - stop, 1));
   const ratePct = round(Math.max(0, Math.min(100, (actualMin/planned)*100)), 1);
+  return { actualMin, ratePct };
+}
+function computeOperatingRateByQty(qty, actualCtSec, runMin){
+  const q = Number(qty);
+  const ct = Number(actualCtSec);
+  const run = Number(runMin);
+  if(!q || q<=0 || !ct || ct<=0 || !run || run<=0) return { actualMin:null, ratePct:null };
+  const actualMin = round((q*ct)/60, 1);
+  const ratePct = round((actualMin/run)*100, 1);
   return { actualMin, ratePct };
 }
 function toast(msg, type='', duration=2600){
@@ -613,13 +622,24 @@ function renderOverview(proj){
 
 // ---------- 가동률 계산기 (개요 옆 패널) ----------
 function renderOperatingRateCalc(){
-  const { plannedMin, stopMin } = state.oprCalc;
-  const { actualMin, ratePct } = computeOperatingRate(plannedMin, stopMin);
+  const { mode, plannedMin, stopMin, qty, actualCt, runMin } = state.oprCalc;
+  const { actualMin, ratePct } = mode==='qty'
+    ? computeOperatingRateByQty(qty, actualCt, runMin)
+    : computeOperatingRateByTime(plannedMin, stopMin);
   const rateClass = ratePct===null?'':ratePct>=95?'good':ratePct>=85?'warn':'bad';
-  return `
-  <div class="panel">
-    <div class="panel-head"><h3>가동률 계산기</h3><span class="ph-tag">Availability</span></div>
-    <div class="panel-body">
+  const fieldsHtml = mode==='qty' ? `
+      <div class="field">
+        <label>투입수량(EA)</label>
+        <input type="number" id="opr-qty" class="mono" min="0" step="1" value="${qty??''}" placeholder="예: 3200">
+      </div>
+      <div class="field" style="margin-top:12px;">
+        <label>실제 C/T(초)</label>
+        <input type="number" id="opr-actual-ct" class="mono" min="0" step="0.01" value="${actualCt??''}" placeholder="예: 4.5">
+      </div>
+      <div class="field" style="margin-top:12px;">
+        <label>가동시간(분)</label>
+        <input type="number" id="opr-run-min" class="mono" min="0" step="1" value="${runMin??''}" placeholder="예: 480">
+      </div>` : `
       <div class="field">
         <label>계획 가동시간(분)</label>
         <input type="number" id="opr-planned-min" class="mono" min="0" step="1" value="${plannedMin??''}" placeholder="예: 480">
@@ -627,7 +647,19 @@ function renderOperatingRateCalc(){
       <div class="field" style="margin-top:12px;">
         <label>정지시간(분)</label>
         <input type="number" id="opr-stop-min" class="mono" min="0" step="1" value="${stopMin??''}" placeholder="예: 30">
+      </div>`;
+  const formulaText = mode==='qty'
+    ? '가동률(%) = (투입수량 × 실제 C/T ÷ 60) ÷ 가동시간 × 100'
+    : '가동률(%) = (계획 가동시간 − 정지시간) ÷ 계획 가동시간 × 100';
+  return `
+  <div class="panel">
+    <div class="panel-head"><h3>가동률 계산기</h3><span class="ph-tag">Availability</span></div>
+    <div class="panel-body">
+      <div class="proc-selector" style="margin-bottom:14px;">
+        <div class="proc-chip ${mode!=='qty'?'active':''}" data-opr-mode="time">시간 기준</div>
+        <div class="proc-chip ${mode==='qty'?'active':''}" data-opr-mode="qty">생산량 기준</div>
       </div>
+      ${fieldsHtml}
       <div class="kpi-strip cols-2" style="margin:16px 0 0;">
         <div class="kpi-card">
           <div class="kpi-label">실가동시간</div>
@@ -638,7 +670,7 @@ function renderOperatingRateCalc(){
           <div class="kpi-value ${rateClass}" id="opr-rate-val">${ratePct!==null?ratePct:'—'}<span class="kpi-unit">%</span></div>
         </div>
       </div>
-      <p style="font-size:11px; color:var(--gauge-grey); margin:12px 0 0;">가동률(%) = (계획 가동시간 − 정지시간) ÷ 계획 가동시간 × 100</p>
+      <p style="font-size:11px; color:var(--gauge-grey); margin:12px 0 0;" id="opr-formula-text">${formulaText}</p>
     </div>
   </div>`;
 }
@@ -1756,23 +1788,47 @@ function attachContentEvents(proj){
     el.addEventListener('click', ()=>{ state.activeProcessId = el.dataset.gotoProcess; setTab('analysis'); });
   });
 
+  // overview: 가동률 계산기 모드 전환 (시간 기준 / 생산량 기준)
+  document.querySelectorAll('[data-opr-mode]').forEach(el=>{
+    el.addEventListener('click', ()=>{ state.oprCalc.mode = el.dataset.oprMode; renderContent(); });
+  });
+
   // overview: 가동률 계산기 (전체 재렌더 없이 입력 즉시 계산)
-  const oprPlannedInput = document.getElementById('opr-planned-min');
-  const oprStopInput = document.getElementById('opr-stop-min');
-  if(oprPlannedInput && oprStopInput){
-    const recalcOpr = ()=>{
-      state.oprCalc.plannedMin = oprPlannedInput.value===''? null : Number(oprPlannedInput.value);
-      state.oprCalc.stopMin = oprStopInput.value===''? null : Number(oprStopInput.value);
-      const { actualMin, ratePct } = computeOperatingRate(state.oprCalc.plannedMin, state.oprCalc.stopMin);
-      const rateClass = ratePct===null?'':ratePct>=95?'good':ratePct>=85?'warn':'bad';
-      document.getElementById('opr-actual-min').innerHTML = `${actualMin!==null?actualMin:'—'}<span class="kpi-unit">분</span>`;
-      const rateEl = document.getElementById('opr-rate-val');
-      rateEl.innerHTML = `${ratePct!==null?ratePct:'—'}<span class="kpi-unit">%</span>`;
-      rateEl.className = `kpi-value ${rateClass}`;
-      rateEl.closest('.kpi-card').className = `kpi-card ${rateClass?'status-'+rateClass:''}`;
-    };
-    oprPlannedInput.addEventListener('input', recalcOpr);
-    oprStopInput.addEventListener('input', recalcOpr);
+  const applyOprResult = ({ actualMin, ratePct })=>{
+    const rateClass = ratePct===null?'':ratePct>=95?'good':ratePct>=85?'warn':'bad';
+    document.getElementById('opr-actual-min').innerHTML = `${actualMin!==null?actualMin:'—'}<span class="kpi-unit">분</span>`;
+    const rateEl = document.getElementById('opr-rate-val');
+    rateEl.innerHTML = `${ratePct!==null?ratePct:'—'}<span class="kpi-unit">%</span>`;
+    rateEl.className = `kpi-value ${rateClass}`;
+    rateEl.closest('.kpi-card').className = `kpi-card ${rateClass?'status-'+rateClass:''}`;
+  };
+  if(state.oprCalc.mode==='qty'){
+    const qtyInput = document.getElementById('opr-qty');
+    const ctInput = document.getElementById('opr-actual-ct');
+    const runMinInput = document.getElementById('opr-run-min');
+    if(qtyInput && ctInput && runMinInput){
+      const recalcOpr = ()=>{
+        state.oprCalc.qty = qtyInput.value===''? null : Number(qtyInput.value);
+        state.oprCalc.actualCt = ctInput.value===''? null : Number(ctInput.value);
+        state.oprCalc.runMin = runMinInput.value===''? null : Number(runMinInput.value);
+        applyOprResult(computeOperatingRateByQty(state.oprCalc.qty, state.oprCalc.actualCt, state.oprCalc.runMin));
+      };
+      qtyInput.addEventListener('input', recalcOpr);
+      ctInput.addEventListener('input', recalcOpr);
+      runMinInput.addEventListener('input', recalcOpr);
+    }
+  } else {
+    const oprPlannedInput = document.getElementById('opr-planned-min');
+    const oprStopInput = document.getElementById('opr-stop-min');
+    if(oprPlannedInput && oprStopInput){
+      const recalcOpr = ()=>{
+        state.oprCalc.plannedMin = oprPlannedInput.value===''? null : Number(oprPlannedInput.value);
+        state.oprCalc.stopMin = oprStopInput.value===''? null : Number(oprStopInput.value);
+        applyOprResult(computeOperatingRateByTime(state.oprCalc.plannedMin, state.oprCalc.stopMin));
+      };
+      oprPlannedInput.addEventListener('input', recalcOpr);
+      oprStopInput.addEventListener('input', recalcOpr);
+    }
   }
 
   const openProcBtn2 = document.getElementById('btn-open-process-modal');
