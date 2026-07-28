@@ -200,6 +200,7 @@ body{
 
 /* ===== KPI STRIP ===== */
 .kpi-strip{display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:22px;}
+.kpi-strip.cols-2{grid-template-columns:repeat(2,1fr);}
 .kpi-strip.cols-3{grid-template-columns:repeat(3,1fr);}
 .kpi-strip.cols-5{grid-template-columns:repeat(5,1fr);}
 .kpi-strip.cols-6{grid-template-columns:repeat(6,1fr);}
@@ -347,6 +348,9 @@ table.data-table td.spec-out{color:var(--red); font-weight:700;}
 table.data-table .del-cell{cursor:pointer; color:var(--gauge-grey); text-align:center; font-family:'Inter';}
 table.data-table .del-cell:hover{color:var(--red);}
 
+/* ===== OVERVIEW ===== */
+.overview-layout{display:grid; grid-template-columns:2fr 1fr; gap:20px; align-items:start;}
+
 /* ===== CPK CARD ===== */
 .cpk-layout{display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start;}
 .cpk-gauge-box{
@@ -443,6 +447,7 @@ table.data-table .del-cell:hover{color:var(--red);}
   .kpi-strip.cols-5,
   .kpi-strip.cols-6{grid-template-columns:repeat(2,1fr);}
   .cpk-layout{grid-template-columns:1fr;}
+  .overview-layout{grid-template-columns:1fr;}
   #sidebar{position:fixed; z-index:90; box-shadow:var(--shadow-md);}
   #topbar .sub{display:none;}
   .ph-top{flex-direction:column; gap:12px; align-items:flex-start;}

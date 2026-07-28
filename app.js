@@ -13,6 +13,7 @@ let state = {
   cpkProcessId: null,         // CPK 탭에서 선택된 공정
   cpkInputMode: 'raw',        // 'raw' (개별측정값) | 'stats' (통계값직접입력)
   timer: { running:false, startTs:0, intervalId:null },
+  oprCalc: { plannedMin: null, stopMin: null }, // 개요 탭 가동률 계산기 입력값 (세션 내 유지, 저장 안 함)
   connected: false,
   unsubProjects: null,
   unsubDetail: []            // 활성 프로젝트의 서브컬렉션 리스너들 (전환 시 해제)
@@ -37,6 +38,14 @@ function round(n, d=2){
 function escapeHtml(s){
   if(s===null||s===undefined) return '';
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function computeOperatingRate(plannedMin, stopMin){
+  const planned = Number(plannedMin);
+  const stop = Number(stopMin) || 0;
+  if(!planned || planned<=0) return { actualMin:null, ratePct:null };
+  const actualMin = Math.max(0, round(planned - stop, 1));
+  const ratePct = round(Math.max(0, Math.min(100, (actualMin/planned)*100)), 1);
+  return { actualMin, ratePct };
 }
 function toast(msg, type='', duration=2600){
   const wrap = document.getElementById('toast-wrap');
@@ -570,31 +579,66 @@ function renderOverview(proj){
     </div>
   </div>
 
-  <div class="panel">
-    <div class="panel-head">
-      <h3>공정별 현황 요약</h3>
-      <span class="ph-tag">${proj.processes.length}개 공정</span>
+  <div class="overview-layout">
+    <div class="panel">
+      <div class="panel-head">
+        <h3>공정별 현황 요약</h3>
+        <span class="ph-tag">${proj.processes.length}개 공정</span>
+      </div>
+      <div class="panel-body overflow-x" style="padding:0;">
+        ${proj.processes.length===0 ? `<div class="mini-empty"><div class="ico">⚙</div><p>아직 등록된 공정이 없습니다. "공정 등록" 탭에서 조립 공정을 추가하세요.</p></div>` : `
+        <div class="col-headers"><div></div><div>공정명</div><div>인원</div><div>Avg C/T</div><div>UPH</div><div>Rate%</div><div>CPK</div><div></div></div>
+        ${proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>{
+          const r = computeRate(proj, p.id);
+          const c = computeCpkSummary(proj, p.id);
+          const rateClass = r.ratePct===null?'':r.ratePct>=100?'chip-green':r.ratePct>=90?'chip-amber':'chip-red';
+          const cpkClass = c.cpk===null?'':c.cpk>=1.33?'chip-green':c.cpk>=1.0?'chip-amber':'chip-red';
+          return `<div class="process-row" data-goto-process="${p.id}">
+            <div class="proc-num">${p.seq}</div>
+            <div class="proc-name">${escapeHtml(p.name)}${p.eq?`<span class="proc-eq">${escapeHtml(p.eq)}</span>`:''}</div>
+            <div class="mono">${p.manpower!=null? p.manpower+'명' : '—'}</div>
+            <div class="mono">${r.avgCt!==null? r.avgCt+'초' : '—'}</div>
+            <div class="mono">${r.uph!==null? r.uph : '—'}</div>
+            <div><span class="rate-pill ${rateClass}">${r.ratePct!==null? r.ratePct+'%' : '—'}</span></div>
+            <div><span class="rate-pill ${cpkClass}">${c.cpk!==null? c.cpk.toFixed(2) : '—'}</span></div>
+            <div></div>
+          </div>`;
+        }).join('')}
+        `}
+      </div>
     </div>
-    <div class="panel-body overflow-x" style="padding:0;">
-      ${proj.processes.length===0 ? `<div class="mini-empty"><div class="ico">⚙</div><p>아직 등록된 공정이 없습니다. "공정 등록" 탭에서 조립 공정을 추가하세요.</p></div>` : `
-      <div class="col-headers"><div></div><div>공정명</div><div>인원</div><div>Avg C/T</div><div>UPH</div><div>Rate%</div><div>CPK</div><div></div></div>
-      ${proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>{
-        const r = computeRate(proj, p.id);
-        const c = computeCpkSummary(proj, p.id);
-        const rateClass = r.ratePct===null?'':r.ratePct>=100?'chip-green':r.ratePct>=90?'chip-amber':'chip-red';
-        const cpkClass = c.cpk===null?'':c.cpk>=1.33?'chip-green':c.cpk>=1.0?'chip-amber':'chip-red';
-        return `<div class="process-row" data-goto-process="${p.id}">
-          <div class="proc-num">${p.seq}</div>
-          <div class="proc-name">${escapeHtml(p.name)}${p.eq?`<span class="proc-eq">${escapeHtml(p.eq)}</span>`:''}</div>
-          <div class="mono">${p.manpower!=null? p.manpower+'명' : '—'}</div>
-          <div class="mono">${r.avgCt!==null? r.avgCt+'초' : '—'}</div>
-          <div class="mono">${r.uph!==null? r.uph : '—'}</div>
-          <div><span class="rate-pill ${rateClass}">${r.ratePct!==null? r.ratePct+'%' : '—'}</span></div>
-          <div><span class="rate-pill ${cpkClass}">${c.cpk!==null? c.cpk.toFixed(2) : '—'}</span></div>
-          <div></div>
-        </div>`;
-      }).join('')}
-      `}
+    ${renderOperatingRateCalc()}
+  </div>`;
+}
+
+// ---------- 가동률 계산기 (개요 옆 패널) ----------
+function renderOperatingRateCalc(){
+  const { plannedMin, stopMin } = state.oprCalc;
+  const { actualMin, ratePct } = computeOperatingRate(plannedMin, stopMin);
+  const rateClass = ratePct===null?'':ratePct>=95?'good':ratePct>=85?'warn':'bad';
+  return `
+  <div class="panel">
+    <div class="panel-head"><h3>가동률 계산기</h3><span class="ph-tag">Availability</span></div>
+    <div class="panel-body">
+      <div class="field">
+        <label>계획 가동시간(분)</label>
+        <input type="number" id="opr-planned-min" class="mono" min="0" step="1" value="${plannedMin??''}" placeholder="예: 480">
+      </div>
+      <div class="field" style="margin-top:12px;">
+        <label>정지시간(분)</label>
+        <input type="number" id="opr-stop-min" class="mono" min="0" step="1" value="${stopMin??''}" placeholder="예: 30">
+      </div>
+      <div class="kpi-strip cols-2" style="margin:16px 0 0;">
+        <div class="kpi-card">
+          <div class="kpi-label">실가동시간</div>
+          <div class="kpi-value" id="opr-actual-min">${actualMin!==null?actualMin:'—'}<span class="kpi-unit">분</span></div>
+        </div>
+        <div class="kpi-card ${rateClass?'status-'+rateClass:''}">
+          <div class="kpi-label">가동률</div>
+          <div class="kpi-value ${rateClass}" id="opr-rate-val">${ratePct!==null?ratePct:'—'}<span class="kpi-unit">%</span></div>
+        </div>
+      </div>
+      <p style="font-size:11px; color:var(--gauge-grey); margin:12px 0 0;">가동률(%) = (계획 가동시간 − 정지시간) ÷ 계획 가동시간 × 100</p>
     </div>
   </div>`;
 }
@@ -1711,6 +1755,25 @@ function attachContentEvents(proj){
   document.querySelectorAll('[data-goto-process]').forEach(el=>{
     el.addEventListener('click', ()=>{ state.activeProcessId = el.dataset.gotoProcess; setTab('analysis'); });
   });
+
+  // overview: 가동률 계산기 (전체 재렌더 없이 입력 즉시 계산)
+  const oprPlannedInput = document.getElementById('opr-planned-min');
+  const oprStopInput = document.getElementById('opr-stop-min');
+  if(oprPlannedInput && oprStopInput){
+    const recalcOpr = ()=>{
+      state.oprCalc.plannedMin = oprPlannedInput.value===''? null : Number(oprPlannedInput.value);
+      state.oprCalc.stopMin = oprStopInput.value===''? null : Number(oprStopInput.value);
+      const { actualMin, ratePct } = computeOperatingRate(state.oprCalc.plannedMin, state.oprCalc.stopMin);
+      const rateClass = ratePct===null?'':ratePct>=95?'good':ratePct>=85?'warn':'bad';
+      document.getElementById('opr-actual-min').innerHTML = `${actualMin!==null?actualMin:'—'}<span class="kpi-unit">분</span>`;
+      const rateEl = document.getElementById('opr-rate-val');
+      rateEl.innerHTML = `${ratePct!==null?ratePct:'—'}<span class="kpi-unit">%</span>`;
+      rateEl.className = `kpi-value ${rateClass}`;
+      rateEl.closest('.kpi-card').className = `kpi-card ${rateClass?'status-'+rateClass:''}`;
+    };
+    oprPlannedInput.addEventListener('input', recalcOpr);
+    oprStopInput.addEventListener('input', recalcOpr);
+  }
 
   const openProcBtn2 = document.getElementById('btn-open-process-modal');
   if(openProcBtn2) openProcBtn2.addEventListener('click', openProcessModal);
