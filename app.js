@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v27'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v28'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -342,6 +342,17 @@ function capaInsight(ratePct, n, hasTargetCt){
   if(ratePct>=100) return { tone:'good', title:'목표 충족', msg:'병목 후보 공정과 교대별 편차를 점검해 안정화하세요.' };
   if(ratePct>=90) return { tone:'warn', title:'경계 구간', msg:'작업 분해(동작/이동/대기) 후 5~10% 단축 CAPA를 수립하세요.' };
   return { tone:'bad', title:'즉시 개선 필요', msg:'설비/치공구/동선 개선과 인력 재배치 CAPA를 즉시 실행하세요.' };
+}
+
+// 표본(정상 사이클) 몇 건이면 평균이 통계적으로 충분히 안정적인지 자동 판단.
+// 시간연구(time study)의 표준 공식 N = (Z·CV/E)^2 사용: 95% 신뢰수준, 허용오차 ±5% 기준으로
+// 지금까지의 변동(CV=표준편차/평균)에서 필요한 최소 표본수를 역산하고, 현재 측정건수와 비교한다.
+function computeSampleSufficiency(r){
+  const Z = 1.96, E = 0.05, MIN_N = 5;
+  if(!r || r.n===0 || !r.avgCt || r.stdCt===null) return { requiredN: MIN_N, isSufficient: false, cvPct: null, n:0 };
+  const cv = r.stdCt / r.avgCt;
+  const requiredN = Math.max(MIN_N, cv>0 ? Math.ceil(Math.pow((Z*cv)/E, 2)) : MIN_N);
+  return { requiredN, isSufficient: r.n >= requiredN, cvPct: round(cv*100,1), n: r.n };
 }
 
 function projectOverallRate(proj){
@@ -1071,6 +1082,7 @@ function renderAnalysisTab(proj){
   const r = computeRate(proj, proc.id);
   const cap = computeCapacity(proj, proc.id);
   const insight = capaInsight(r.ratePct, r.n, !!(proc.targetCt && proc.targetCt>0));
+  const sample = computeSampleSufficiency(r);
   const ctGapSec = (proc.targetCt && r.avgCt!==null) ? round(proc.targetCt - r.avgCt, 2) : null;
   const cycles = getCycles(proj, proc.id).slice().reverse();
 
@@ -1133,6 +1145,12 @@ function renderAnalysisTab(proj){
         <div>
           <div class="h-main"><span class="status-dot ${insight.tone}"></span>${insight.title}</div>
           <div class="h-sub">${insight.msg}</div>
+        </div>
+      </div>
+      <div class="history-row" style="border:1px solid var(--line); border-radius:8px; margin-top:8px;">
+        <div>
+          <div class="h-main"><span class="status-dot ${sample.isSufficient?'good':'warn'}"></span>${sample.isSufficient? `측정 충분 (${sample.n}건, 권장 ${sample.requiredN}건 이상)` : `측정 더 필요 (현재 ${sample.n}건 / 권장 ${sample.requiredN}건)`}</div>
+          <div class="h-sub">${sample.cvPct!==null? `현재 변동계수(σ/평균) ${sample.cvPct}% 기준, 95% 신뢰수준·오차 ±5%에서 필요한 최소 표본수입니다.` : '사이클타임을 먼저 측정하세요.'}${!sample.isSufficient? ` ${Math.max(0, sample.requiredN - sample.n)}건 더 측정을 권장합니다.` : ''}</div>
         </div>
       </div>
     </div>
