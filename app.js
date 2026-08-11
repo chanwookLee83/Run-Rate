@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v29'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v30'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -342,6 +342,14 @@ function capaInsight(ratePct, n, hasTargetCt){
   if(ratePct>=100) return { tone:'good', title:'목표 충족', msg:'병목 후보 공정과 교대별 편차를 점검해 안정화하세요.' };
   if(ratePct>=90) return { tone:'warn', title:'경계 구간', msg:'작업 분해(동작/이동/대기) 후 5~10% 단축 CAPA를 수립하세요.' };
   return { tone:'bad', title:'즉시 개선 필요', msg:'설비/치공구/동선 개선과 인력 재배치 CAPA를 즉시 실행하세요.' };
+}
+
+// 목표 C/T 대비 Rate%가 합격 기준(기본 98%)에 못 미치면 재측정이 필요하다고 안내.
+const RATE_PASS_THRESHOLD = 98;
+function measurementVerdict(ratePct){
+  if(ratePct===null) return { tone:'warn', title:'판정 불가', msg:'목표 C/T 설정과 사이클타임 측정이 모두 필요합니다.' };
+  if(ratePct >= RATE_PASS_THRESHOLD) return { tone:'good', title:`합격 (Rate ${ratePct}%)`, msg:`목표 C/T 대비 ${RATE_PASS_THRESHOLD}% 이상 충족했습니다.` };
+  return { tone:'bad', title:`재측정 필요 (Rate ${ratePct}%)`, msg:`목표 C/T 대비 ${RATE_PASS_THRESHOLD}% 미만입니다. 작업조건(설비/치공구/작업방법)을 점검한 뒤 사이클타임을 다시 측정하세요.` };
 }
 
 // 표본(정상 사이클) 몇 건이면 평균이 통계적으로 충분히 안정적인지 자동 판단.
@@ -1102,6 +1110,7 @@ function renderAnalysisTab(proj){
   const r = computeRate(proj, proc.id);
   const cap = computeCapacity(proj, proc.id);
   const insight = capaInsight(r.ratePct, r.n, !!(proc.targetCt && proc.targetCt>0));
+  const verdict = measurementVerdict(r.ratePct);
   const sample = sampleSufficiencyInsight(r);
   const ctGapSec = (proc.targetCt && r.avgCt!==null) ? round(proc.targetCt - r.avgCt, 2) : null;
   const cycles = getCycles(proj, proc.id).slice().reverse();
@@ -1165,6 +1174,12 @@ function renderAnalysisTab(proj){
         <div>
           <div class="h-main"><span class="status-dot ${insight.tone}"></span>${insight.title}</div>
           <div class="h-sub">${insight.msg}</div>
+        </div>
+      </div>
+      <div class="history-row" style="border:1px solid var(--line); border-radius:8px; margin-top:8px;">
+        <div>
+          <div class="h-main"><span class="status-dot ${verdict.tone}"></span>${verdict.title}</div>
+          <div class="h-sub">${verdict.msg}</div>
         </div>
       </div>
       <div class="history-row" style="border:1px solid var(--line); border-radius:8px; margin-top:8px;">
