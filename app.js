@@ -5,13 +5,14 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v18'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v19'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
   activeProcessId: null,      // 분석 탭에서 선택된 공정
   cpkProcessId: null,         // CPK 탭에서 선택된 공정
   cpkInputMode: 'raw',        // 'raw' (개별측정값) | 'stats' (통계값직접입력)
+  m4Filter: null,              // 4M 이상 원인 분석에서 선택된 사유 필터 (null=전체)
   timer: { running:false, startTs:0, intervalId:null },
   oprCalc: { mode: 'time', plannedMin: null, stopMin: null, qty: null, actualCt: null, runTime: null, qtyUnit: 'sec' }, // 개요 탭 가동률 계산기 입력값 (세션 내 유지, 저장 안 함)
   connected: false,
@@ -952,6 +953,9 @@ function bindCycleTableEvents(container, projId){
 function render4mPanel(proj, proc){
   const m4 = compute4mSummary(proj, proc.id);
   const maxCount = Math.max(1, ...FOUR_M_REASONS.map(k=>m4.counts[k]));
+  const activeFilter = state.m4Filter && m4.counts[state.m4Filter]>0 ? state.m4Filter : null;
+  const list = (activeFilter ? m4.abnormal.filter(c=> c.reasons.includes(activeFilter)) : m4.abnormal)
+    .slice().sort((a,b)=>b.ts-a.ts);
   return `
   <div class="panel">
     <div class="panel-head"><h3>4M 이상 원인 분석</h3><span class="ph-tag">${m4.abnormalCount}건 / 전체 ${m4.totalCycles}건</span></div>
@@ -965,8 +969,9 @@ function render4mPanel(proj, proc){
       <div style="display:flex; flex-direction:column; gap:10px;">
         ${FOUR_M_REASONS.map(k=>{
           const w = Math.max(3, (m4.counts[k]/maxCount)*100);
-          return `<div class="rate-bar-row">
-            <div class="rate-bar-label">${k}</div>
+          const isActive = activeFilter===k;
+          return `<div class="rate-bar-row m4-filter-row ${isActive?'active':''}" data-m4-filter="${k}" title="클릭하면 ${k} 사유만 필터링됩니다">
+            <div class="rate-bar-label">${k}${isActive?' ✓':''}</div>
             <div style="height:10px; background:#ECE9E0; border-radius:999px; overflow:hidden;">
               <div style="width:${m4.counts[k]>0?w:0}%; height:100%; background:var(--red);"></div>
             </div>
@@ -974,12 +979,15 @@ function render4mPanel(proj, proc){
           </div>`;
         }).join('')}
       </div>
-      <p style="font-size:11px; color:var(--gauge-grey); margin-top:10px;">4M 사유가 태깅된 랩은 이상치로 분류되어 평균 C/T·Rate%·CAPA 계산에서 자동 제외되고, 여기에서만 별도 집계됩니다. 손실시간은 정상 평균 C/T(${m4.baseline??'—'}초) 초과분의 합입니다.</p>
+      <p style="font-size:11px; color:var(--gauge-grey); margin-top:10px;">4M 사유가 태깅된 랩은 이상치로 분류되어 평균 C/T·Rate%·CAPA 계산에서 자동 제외되고, 여기에서만 별도 집계됩니다. 손실시간은 정상 평균 C/T(${m4.baseline??'—'}초) 초과분의 합입니다. 위 막대를 클릭하면 해당 사유의 코멘트만 걸러볼 수 있습니다.</p>
       ${m4.abnormal.length>0 ? `
       <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
-        <div style="font-size:11px; font-weight:700; color:var(--gauge-grey); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:6px;">이상 상세 (최근순)</div>
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+          <div style="font-size:11px; font-weight:700; color:var(--gauge-grey); text-transform:uppercase; letter-spacing:0.04em;">이상 상세 (최근순)${activeFilter?` · ${activeFilter}만 보기`:''}</div>
+          ${activeFilter? `<div class="proc-chip" data-m4-filter="${activeFilter}" style="padding:2px 9px; font-size:10.5px;">전체 보기</div>` : ''}
+        </div>
         <div style="max-height:220px; overflow-y:auto;">
-          ${m4.abnormal.slice().sort((a,b)=>b.ts-a.ts).map(c=>`
+          ${list.length===0? `<div class="mini-empty" style="padding:16px;"><p>${activeFilter} 사유로 태깅된 랩이 없습니다.</p></div>` : list.map(c=>`
           <div class="history-row" style="padding:9px 4px;">
             <div>
               <div class="h-main">${fmtDate(c.ts)} · ${c.ct.toFixed(2)}초 <span style="color:var(--red); font-weight:600;">[${c.reasons.join(', ')}]</span></div>
@@ -1998,7 +2006,14 @@ function attachContentEvents(proj){
 
   // analysis tab
   document.querySelectorAll('[data-select-process]').forEach(el=>{
-    el.addEventListener('click', ()=>{ state.activeProcessId = el.dataset.selectProcess; renderContent(); });
+    el.addEventListener('click', ()=>{ state.activeProcessId = el.dataset.selectProcess; state.m4Filter = null; renderContent(); });
+  });
+  document.querySelectorAll('[data-m4-filter]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const k = el.dataset.m4Filter;
+      state.m4Filter = (state.m4Filter === k) ? null : k;
+      renderContent();
+    });
   });
   // 병목 기준 생산 가능 수량 - 가동 조건(일 가동시간/주·월 가동일수) 프리셋 버튼
   document.querySelectorAll('[data-cap-hours]').forEach(el=>{

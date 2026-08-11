@@ -320,6 +320,10 @@ body{
 .rate-bar-row{display:grid; grid-template-columns:170px 1fr 70px; gap:10px; align-items:center; margin-bottom:10px;}
 .rate-bar-label{font-size:12px; font-weight:600; color:var(--ink-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
 .rate-bar-val{font-size:12px; text-align:right; color:var(--ink);}
+.m4-filter-row{cursor:pointer; padding:4px 6px; margin:0 -6px 6px; border-radius:6px; transition:background .15s;}
+.m4-filter-row:hover{background:var(--amber-soft);}
+.m4-filter-row.active{background:var(--red-soft);}
+.m4-filter-row.active .rate-bar-label{color:var(--red);}
 .proc-chip{
   padding:7px 13px; border-radius:18px; font-size:12px; font-weight:600; cursor:pointer;
   border:1px solid var(--line-strong); background:#fff; color:var(--ink-soft); transition:all .12s;
