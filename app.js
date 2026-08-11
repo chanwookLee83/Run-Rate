@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v30'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v31'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -13,6 +13,7 @@ let state = {
   cpkProcessId: null,         // CPK 탭에서 선택된 공정
   cpkInputMode: 'raw',        // 'raw' (개별측정값) | 'stats' (통계값직접입력)
   m4Filter: null,              // 4M 이상 원인 분석에서 선택된 사유 필터 (null=전체)
+  projectTargetMode: 'time',   // 프로젝트 등록 모달의 목표 산출 기준: 'time' | 'qty'
   timer: { running:false, startTs:0, intervalId:null },
   oprCalc: { mode: 'time', plannedMin: null, stopMin: null, qty: null, actualCt: null, runTime: null, qtyUnit: 'sec' }, // 개요 탭 가동률 계산기 입력값 (세션 내 유지, 저장 안 함)
   connected: false,
@@ -1809,29 +1810,63 @@ function openProjectModal(proj){
 
   document.getElementById('inp-target-ct').value = ct ?? '';
   document.getElementById('inp-runrate-hours').value = hours ?? '';
+  document.getElementById('inp-target-qty-direct').value = proj?.targetQty ?? '';
   document.getElementById('inp-remark').value = proj? (proj.remark??'') : '';
-  updateTargetAutoPreview();
+  setProjectTargetMode('time');
   openModal('modal-project');
 }
 
-function computeTargetFromCtHours(ctVal, hoursVal){
-  const ct = Number(ctVal);
-  const hours = Number(hoursVal);
-  const targetUph = (ct>0) ? round(3600/ct, 1) : null;
-  const targetQty = (targetUph!==null && hours>0) ? round(targetUph*hours, 0) : null;
-  return { targetUph, targetQty };
+// 목표 산출 기준: 'time'(Run&Rate 시간 입력 → 수량 자동계산) / 'qty'(목표 생산수량 입력 → 시간 자동계산)
+function setProjectTargetMode(mode){
+  state.projectTargetMode = mode;
+  const timeChip = document.getElementById('target-mode-time');
+  const qtyChip = document.getElementById('target-mode-qty');
+  if(timeChip) timeChip.classList.toggle('active', mode==='time');
+  if(qtyChip) qtyChip.classList.toggle('active', mode==='qty');
+  const hoursField = document.getElementById('field-runrate-hours');
+  const qtyField = document.getElementById('field-target-qty-direct');
+  if(hoursField) hoursField.style.display = mode==='time' ? '' : 'none';
+  if(qtyField) qtyField.style.display = mode==='qty' ? '' : 'none';
+  const hint = document.getElementById('target-mode-hint');
+  if(hint) hint.textContent = mode==='time'
+    ? '목표 C/T와 Run&Rate 시간을 입력하면 목표 UPH·목표 양산 수량이 자동으로 계산되어 저장됩니다. (목표 UPH = 3600 ÷ C/T, 목표 수량 = UPH × 시간)'
+    : '목표 C/T와 목표 생산수량을 입력하면 목표 UPH·필요 Run&Rate 시간이 자동으로 계산되어 저장됩니다. (목표 UPH = 3600 ÷ C/T, 필요 시간 = 수량 ÷ UPH)';
+  updateTargetAutoPreview();
 }
+document.querySelectorAll('[data-target-mode]').forEach(el=>{
+  el.addEventListener('click', ()=> setProjectTargetMode(el.dataset.targetMode));
+});
 
+function computeProjectTargets(mode, ctVal, hoursVal, qtyVal){
+  const ct = Number(ctVal);
+  const targetUph = (ct>0) ? round(3600/ct, 1) : null;
+  if(targetUph===null) return { targetUph:null, targetQty:null, runRateHours:null };
+  if(mode==='qty'){
+    const qty = Number(qtyVal);
+    const targetQty = qty>0 ? Math.round(qty) : null;
+    const runRateHours = targetQty!==null ? round(targetQty/targetUph, 2) : null;
+    return { targetUph, targetQty, runRateHours };
+  }
+  const hours = Number(hoursVal);
+  const targetQty = hours>0 ? round(targetUph*hours, 0) : null;
+  return { targetUph, targetQty, runRateHours: hours>0 ? hours : null };
+}
 function updateTargetAutoPreview(){
   const preview = document.getElementById('target-auto-preview');
   if(!preview) return;
+  const mode = state.projectTargetMode || 'time';
   const ctVal = document.getElementById('inp-target-ct').value;
   const hoursVal = document.getElementById('inp-runrate-hours').value;
-  const { targetUph, targetQty } = computeTargetFromCtHours(ctVal, hoursVal);
+  const qtyVal = document.getElementById('inp-target-qty-direct').value;
+  const { targetUph, targetQty, runRateHours } = computeProjectTargets(mode, ctVal, hoursVal, qtyVal);
   if(targetUph===null){ preview.textContent = 'UPH — · 수량 —'; return; }
-  preview.textContent = `UPH ${targetUph} · 수량 ${targetQty!==null? targetQty.toLocaleString()+' EA' : '— (시간 입력 필요)'}`;
+  if(mode==='qty'){
+    preview.textContent = `UPH ${targetUph} · 필요시간 ${runRateHours!==null? runRateHours+'h' : '— (수량 입력 필요)'}`;
+  } else {
+    preview.textContent = `UPH ${targetUph} · 수량 ${targetQty!==null? targetQty.toLocaleString()+' EA' : '— (시간 입력 필요)'}`;
+  }
 }
-['inp-target-ct','inp-runrate-hours'].forEach(id=>{
+['inp-target-ct','inp-runrate-hours','inp-target-qty-direct'].forEach(id=>{
   const el = document.getElementById(id);
   if(el) el.addEventListener('input', updateTargetAutoPreview);
 });
@@ -1840,11 +1875,12 @@ document.getElementById('btn-save-project').addEventListener('click', async ()=>
   const pn = document.getElementById('inp-pn').value.trim();
   const pname = document.getElementById('inp-pname').value.trim();
   if(!pn || !pname){ toast('품번과 품명은 필수입니다', 'error'); return; }
+  const mode = state.projectTargetMode || 'time';
   const targetCtVal = document.getElementById('inp-target-ct').value;
   const runRateHoursVal = document.getElementById('inp-runrate-hours').value;
+  const targetQtyVal = document.getElementById('inp-target-qty-direct').value;
   const targetCt = targetCtVal? Number(targetCtVal) : null;
-  const runRateHours = runRateHoursVal? Number(runRateHoursVal) : null;
-  const { targetUph, targetQty } = computeTargetFromCtHours(targetCtVal, runRateHoursVal);
+  const { targetUph, targetQty, runRateHours } = computeProjectTargets(mode, targetCtVal, runRateHoursVal, targetQtyVal);
   const remark = document.getElementById('inp-remark').value.trim();
   const btn = document.getElementById('btn-save-project');
   btn.disabled = true;
