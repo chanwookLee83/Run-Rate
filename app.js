@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v25'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v26'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -582,12 +582,19 @@ function renderContent(){
   const proj = activeProject();
   if(!proj) return;
   const root = document.getElementById('content');
+  // 측정 기록 표의 스크롤 위치를 재렌더링 전후로 유지 (4M 체크박스/코멘트 수정 시 목록이 맨 위로 튀는 문제 방지)
+  const prevRecordBody = document.querySelector('#cycle-record-panel .panel-body');
+  const prevScrollTop = prevRecordBody ? prevRecordBody.scrollTop : null;
   if(state.activeTab === 'overview') root.innerHTML = renderOverview(proj);
   else if(state.activeTab === 'process') root.innerHTML = renderProcessTab(proj);
   else if(state.activeTab === 'analysis') root.innerHTML = renderAnalysisTab(proj);
   else if(state.activeTab === 'cpk') root.innerHTML = renderCpkTab(proj);
   else if(state.activeTab === 'history') root.innerHTML = renderHistoryTab(proj);
   attachContentEvents(proj);
+  if(prevScrollTop !== null){
+    const newRecordBody = document.querySelector('#cycle-record-panel .panel-body');
+    if(newRecordBody) newRecordBody.scrollTop = prevScrollTop;
+  }
 }
 
 // ---------- OVERVIEW ----------
@@ -2354,7 +2361,9 @@ function refreshCycleTableOnly(proj){
     if(tag) tag.textContent = cycles.length + '건';
     const body = recordPanel.querySelector('.panel-body');
     if(body){
+      const prevScrollTop = body.scrollTop;
       body.innerHTML = renderCycleTableBody(cycles);
+      body.scrollTop = prevScrollTop;
       // 새로 그려진 삭제버튼/4M 체크박스에 이벤트 다시 바인딩
       bindCycleTableEvents(recordPanel, proj.id);
     }
