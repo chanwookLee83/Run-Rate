@@ -169,7 +169,7 @@ function subscribeProjectDetail(pid){
     snap.docs.forEach(d=>{
       const c = d.data();
       if(!byProc[c.processId]) byProc[c.processId] = [];
-      byProc[c.processId].push({ id:d.id, ts: Number(c.ts), ct: Number(c.ct), reasons: Array.isArray(c.reasons) ? c.reasons : [] });
+      byProc[c.processId].push({ id:d.id, ts: Number(c.ts), ct: Number(c.ct), reasons: Array.isArray(c.reasons) ? c.reasons : [], note: c.note || '' });
     });
     proj.cycles = byProc;
     if(state.timer.running){
@@ -903,7 +903,7 @@ function renderCycleTableBody(cycles){
   if(cycles.length===0) return `<div class="mini-empty"><div class="ico">⏱</div><p>측정된 사이클타임이 없습니다.</p></div>`;
   return `
   <table class="data-table">
-    <thead><tr><th>#</th><th>측정시각</th><th>사이클타임(초)</th><th>4M 이상 사유</th><th></th></tr></thead>
+    <thead><tr><th>#</th><th>측정시각</th><th>사이클타임(초)</th><th>4M 이상 사유</th><th>코멘트</th><th></th></tr></thead>
     <tbody>
     ${cycles.map((c,i)=>{
       const reasons = c.reasons || [];
@@ -911,7 +911,7 @@ function renderCycleTableBody(cycles){
       const checks = FOUR_M_REASONS.map(reason=>
         `<label><input type="checkbox" data-cycle-id="${c.id}" data-reason="${reason}" ${reasons.includes(reason)?'checked':''}>${reason}</label>`
       ).join('');
-      return `<tr class="${abnormal?'m4-abnormal':''}"><td>${cycles.length-i}</td><td>${fmtDate(c.ts)}</td><td>${c.ct.toFixed(2)}</td><td><div class="m4-check-group">${checks}</div></td><td class="del-cell" data-del-cycle="${c.id}">삭제</td></tr>`;
+      return `<tr class="${abnormal?'m4-abnormal':''}"><td>${cycles.length-i}</td><td>${fmtDate(c.ts)}</td><td>${c.ct.toFixed(2)}</td><td><div class="m4-check-group">${checks}</div></td><td><input type="text" class="m4-note-inp" data-note-cycle-id="${c.id}" value="${escapeHtml(c.note||'')}" placeholder="사유 상세 메모"></td><td class="del-cell" data-del-cycle="${c.id}">삭제</td></tr>`;
     }).join('')}
     </tbody>
   </table>`;
@@ -933,6 +933,14 @@ function bindCycleTableEvents(container, projId){
         await fb.updateDoc(fb.doc(cyclesCol(projId), el.dataset.cycleId), { reasons: Array.from(current) });
       }catch(e){ toast('저장 실패: '+e.message, 'error'); el.checked = !el.checked; }
     });
+  });
+  container.querySelectorAll('[data-note-cycle-id]').forEach(el=>{
+    el.addEventListener('change', async ()=>{
+      try{
+        await fb.updateDoc(fb.doc(cyclesCol(projId), el.dataset.noteCycleId), { note: el.value.trim() });
+      }catch(e){ toast('저장 실패: '+e.message, 'error'); }
+    });
+    el.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); el.blur(); } });
   });
 }
 
@@ -961,7 +969,20 @@ function render4mPanel(proj, proc){
           </div>`;
         }).join('')}
       </div>
-      <p style="font-size:11px; color:var(--gauge-grey); margin-top:10px;">4M 사유가 태깅된 랩은 이상치로 분류되어 평균 C/T·Rate%·CAPA 계산에서 자동 제외되고, 여기에서만 별도 집계됩니다. 손실시간은 정상 평균 C/T(${m4.baseline??'—'}초) 초과분의 합입니다.</p>`}
+      <p style="font-size:11px; color:var(--gauge-grey); margin-top:10px;">4M 사유가 태깅된 랩은 이상치로 분류되어 평균 C/T·Rate%·CAPA 계산에서 자동 제외되고, 여기에서만 별도 집계됩니다. 손실시간은 정상 평균 C/T(${m4.baseline??'—'}초) 초과분의 합입니다.</p>
+      ${m4.abnormal.length>0 ? `
+      <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
+        <div style="font-size:11px; font-weight:700; color:var(--gauge-grey); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:6px;">이상 상세 (최근순)</div>
+        <div style="max-height:220px; overflow-y:auto;">
+          ${m4.abnormal.slice().sort((a,b)=>b.ts-a.ts).map(c=>`
+          <div class="history-row" style="padding:9px 4px;">
+            <div>
+              <div class="h-main">${fmtDate(c.ts)} · ${c.ct.toFixed(2)}초 <span style="color:var(--red); font-weight:600;">[${c.reasons.join(', ')}]</span></div>
+              ${c.note ? `<div class="h-sub">${escapeHtml(c.note)}</div>` : ''}
+            </div>
+          </div>`).join('')}
+        </div>
+      </div>` : ''}`}
     </div>
   </div>`;
 }
@@ -1435,8 +1456,8 @@ function exportCyclesCSV(proj, proc){
   rows.push(['설비', m4.counts['설비'], '사람', m4.counts['사람'], '방법', m4.counts['방법'], '자재', m4.counts['자재']]);
   rows.push([]);
   csvSection(rows, '측정 상세');
-  rows.push(['No','측정시각','사이클타임(초)','4M 이상 사유']);
-  cycles.forEach((c,i)=> rows.push([i+1, fmtDate(c.ts), c.ct, (c.reasons&&c.reasons.length)?c.reasons.join('/'):'']));
+  rows.push(['No','측정시각','사이클타임(초)','4M 이상 사유','코멘트']);
+  cycles.forEach((c,i)=> rows.push([i+1, fmtDate(c.ts), c.ct, (c.reasons&&c.reasons.length)?c.reasons.join('/'):'', c.note||'']));
   rows.push([]);
   rows.push(['비고', 'Rate(%) = 목표 C/T ÷ 실측 평균 C/T × 100 (4M 이상 사유가 태깅된 랩은 제외)']);
   downloadCSV(`RunRate_${proj.pn}_${proc.name}_사이클타임_${fmtDateShort(nowISO())}.csv`, rows);
