@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v17'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v18'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -909,7 +909,7 @@ function renderCycleTableBody(cycles){
       const reasons = c.reasons || [];
       const abnormal = reasons.length>0;
       const checks = FOUR_M_REASONS.map(reason=>
-        `<label><input type="checkbox" data-cycle-id="${c.id}" data-reason="${reason}" ${reasons.includes(reason)?'checked':''}>${reason}</label>`
+        `<label><input type="radio" name="m4-reason-${c.id}" data-cycle-id="${c.id}" data-reason="${reason}" ${reasons.includes(reason)?'checked':''}>${reason}</label>`
       ).join('');
       return `<tr class="${abnormal?'m4-abnormal':''}"><td>${cycles.length-i}</td><td>${fmtDate(c.ts)}</td><td>${c.ct.toFixed(2)}</td><td><div class="m4-check-group">${checks}</div></td><td><input type="text" class="m4-note-inp" data-note-cycle-id="${c.id}" value="${escapeHtml(c.note||'')}" placeholder="사유 상세 메모"></td><td class="del-cell" data-del-cycle="${c.id}">삭제</td></tr>`;
     }).join('')}
@@ -923,15 +923,20 @@ function bindCycleTableEvents(container, projId){
       catch(e){ toast('삭제 실패: '+e.message, 'error'); }
     });
   });
+  // 4M 사유는 라디오(단일 선택)로 동작. 이미 선택된 항목을 다시 클릭하면 선택 해제(사유 없음)된다.
   container.querySelectorAll('[data-cycle-id][data-reason]').forEach(el=>{
+    el.addEventListener('mousedown', ()=>{ el.dataset.wasChecked = el.checked ? '1' : '0'; });
+    el.addEventListener('click', ()=>{
+      if(el.dataset.wasChecked==='1'){
+        el.checked = false;
+        el.dispatchEvent(new Event('change'));
+      }
+    });
     el.addEventListener('change', async ()=>{
-      const proj = getProject(projId);
-      const cyc = getCycles(proj, state.activeProcessId).find(c=>c.id===el.dataset.cycleId);
-      const current = new Set(cyc && cyc.reasons ? cyc.reasons : []);
-      if(el.checked) current.add(el.dataset.reason); else current.delete(el.dataset.reason);
+      const reasons = el.checked ? [el.dataset.reason] : [];
       try{
-        await fb.updateDoc(fb.doc(cyclesCol(projId), el.dataset.cycleId), { reasons: Array.from(current) });
-      }catch(e){ toast('저장 실패: '+e.message, 'error'); el.checked = !el.checked; }
+        await fb.updateDoc(fb.doc(cyclesCol(projId), el.dataset.cycleId), { reasons });
+      }catch(e){ toast('저장 실패: '+e.message, 'error'); }
     });
   });
   container.querySelectorAll('[data-note-cycle-id]').forEach(el=>{
