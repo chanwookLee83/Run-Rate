@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v31'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v32'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -405,31 +405,19 @@ function findBottleneck(proj){
 }
 
 // ---------- Defect rate ----------
-function defectSummary(proj, processId){
-  const list = processId ? proj.defects.filter(d=>d.processId===processId) : proj.defects;
-  const totalDefect = list.reduce((s,d)=>s+Number(d.qty||0),0);
-  const producedFromDefect = list.reduce((m,d)=>{
-    const v = Number(d.total);
-    return (isNaN(v) || v < 0) ? m : Math.max(m, v);
-  }, 0);
-  const totalProduced = producedFromDefect;
+// 프로젝트 전체 품질 요약은 "공정별 품질 상세"(processDefectSummaryList)를 그대로 집계한다.
+// 그래야 공정별 수동 입력(override)이 있어도 상단 KPI와 공정별 표가 항상 같은 숫자를 보여준다.
+function defectSummary(proj){
+  const rows = processDefectSummaryList(proj);
+  const totalDefect = rows.reduce((s,r)=>s+(r.defect||0),0);
+  const totalProduced = rows.reduce((m,r)=>Math.max(m, r.produced||0), 0);
   const goodQty = Math.max(totalProduced - totalDefect, 0);
   const ppm = totalProduced>0 ? round((totalDefect/totalProduced)*1000000,0) : null;
   const defectRate = totalProduced>0 ? round((totalDefect/totalProduced)*100,3) : null;
   const yieldRate = totalProduced>0 ? round((goodQty/totalProduced)*100,3) : null;
-  const targetQty = (!processId && proj.targetQty) ? Number(proj.targetQty) : null;
+  const targetQty = proj.targetQty ? Number(proj.targetQty) : null;
   const runProgressPct = (targetQty && targetQty>0) ? round((totalProduced/targetQty)*100,1) : null;
-  return {
-    totalDefect,
-    totalProduced,
-    goodQty,
-    ppm,
-    defectRate,
-    yieldRate,
-    targetQty,
-    runProgressPct,
-    count: list.length
-  };
+  return { totalDefect, totalProduced, goodQty, ppm, defectRate, yieldRate, targetQty, runProgressPct };
 }
 
 function processDefectSummaryList(proj){
@@ -642,7 +630,7 @@ function renderContent(){
 function renderOverview(proj){
   const overallRate = projectOverallRate(proj);
   const bottleneck = findBottleneck(proj);
-  const ds = defectSummary(proj, null);
+  const ds = defectSummary(proj);
   const totalManpower = proj.processes.reduce((s,p)=>s+(Number(p.manpower)||0), 0);
   let cpkWorst=null;
   proj.processes.forEach(p=>{
@@ -1409,8 +1397,7 @@ function renderCpkStatsInput(cd){
 
 // ---------- HISTORY TAB ----------
 function renderHistoryTab(proj){
-  const defects = proj.defects.filter(d=>Number(d.qty||0) > 0).slice().sort((a,b)=> b.ts - a.ts);
-  const ds = defectSummary(proj, null);
+  const ds = defectSummary(proj);
   const procRows = processDefectSummaryList(proj);
   const overallRate = projectOverallRate(proj);
   const rrClass = overallRate===null? '' : overallRate>=100?'good':overallRate>=90?'warn':'bad';
@@ -1451,7 +1438,13 @@ function renderHistoryTab(proj){
   <div class="panel">
     <div class="panel-head">
       <h3>공정별 품질 상세</h3>
-      <span class="ph-tag">${procRows.length}개 공정</span>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span class="ph-tag">${procRows.length}개 공정</span>
+        <button class="btn btn-sm" id="btn-export-defects">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          CSV
+        </button>
+      </div>
     </div>
     <div class="panel-body" style="padding:0; overflow-x:auto; -webkit-overflow-scrolling:touch;">
       ${procRows.length===0 ? `<div class="mini-empty"><p>등록된 공정이 없습니다.</p></div>` : `
@@ -1481,39 +1474,7 @@ function renderHistoryTab(proj){
         </tr>`).join('')}
         </tbody>
       </table>
-      <p style="font-size:11px; color:var(--gauge-grey); padding:10px 14px;">생산수량·불량수량은 기본적으로 아래 "불량 이력"의 총생산수량(total) 기준으로 자동 계산됩니다. 값을 직접 입력하고 체크(✓)로 저장하면 해당 공정은 수동 입력값으로 고정되며, 되돌리기(↺)로 자동계산으로 복원할 수 있습니다.</p>`}
-    </div>
-  </div>
-
-  <div class="panel">
-    <div class="panel-head">
-      <h3>불량 이력</h3>
-      <div style="display:flex; gap:8px;">
-        <button class="btn btn-sm" id="btn-export-defects">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          CSV
-        </button>
-        <button class="btn btn-primary btn-sm" id="btn-open-defect-modal">+ 결과 기록</button>
-      </div>
-    </div>
-    <div class="panel-body" style="padding:0;">
-      ${defects.length===0? `<div class="mini-empty"><div class="ico">✓</div><p>표시할 불량 기록이 없습니다.</p></div>` : defects.map(d=>{
-        const proc = proj.processes.find(p=>p.id===d.processId);
-        return `<div class="history-row">
-          <div>
-            <div class="h-main">${escapeHtml(d.type||'미분류')} <span class="mono" style="color:var(--red); font-weight:700;">×${d.qty}</span></div>
-            <div class="h-sub">${proc?escapeHtml(proc.name):'공정 미지정'} · ${fmtDate(d.ts)}${d.total?' · 총생산 '+d.total:''}${d.remark?' · '+escapeHtml(d.remark):''}</div>
-          </div>
-          <div class="h-actions">
-            <div class="icon-mini" data-edit-defect="${d.id}" title="수정">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5z"/></svg>
-            </div>
-            <div class="icon-mini" data-del-defect="${d.id}" title="삭제">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
-            </div>
-          </div>
-        </div>`;
-      }).join('')}
+      <p style="font-size:11px; color:var(--gauge-grey); padding:10px 14px;">생산수량·불량수량·불량명을 직접 입력하고 체크(✓)로 저장하면 해당 공정에 고정됩니다. 이전에 기록된 불량 이력이 있는 공정은 그 이력 기준으로 자동 계산된 값이 기본으로 표시되며, 되돌리기(↺)로 언제든 그 자동계산 값으로 복원할 수 있습니다.</p>`}
     </div>
   </div>`;
 }
@@ -1636,7 +1597,7 @@ function exportCpkCSV(proj, proc){
 
 function exportDefectsCSV(proj){
   const rows = csvReportHeader('RUN&RATE 결과 이력 리포트', proj);
-  const ds = defectSummary(proj,null);
+  const ds = defectSummary(proj);
   csvSection(rows, '요약');
   rows.push(['목표수량(EA)', proj.targetQty??'—', '누적생산수량(EA)', ds.totalProduced]);
   rows.push(['양품수량(EA)', ds.goodQty, '불량수량(EA)', ds.totalDefect]);
@@ -1672,7 +1633,7 @@ function exportDefectsCSV(proj){
 
 function exportOnePageSummaryCSV(proj){
   const rows = csvReportHeader('RUN&RATE 한장 요약 리포트', proj);
-  const ds = defectSummary(proj, null);
+  const ds = defectSummary(proj);
   const overallRate = projectOverallRate(proj);
   const bottleneck = findBottleneck(proj);
   let cpkWorst = null;
@@ -1754,33 +1715,6 @@ async function exportFullBackupJSON(){
 
 function openModal(id){ document.getElementById(id).style.display='flex'; }
 function closeModal(id){ document.getElementById(id).style.display='none'; }
-
-let editingDefectId = null;
-function openDefectModal(proj, defect){
-  const sel = document.getElementById('defect-proc');
-  sel.innerHTML = proj.processes.slice().sort((a,b)=>a.seq-b.seq).map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
-  const title = document.getElementById('modal-defect-title');
-  const saveBtn = document.getElementById('btn-save-defect');
-  if(defect){
-    editingDefectId = defect.id;
-    if(title) title.textContent = '결과 기록 수정';
-    if(saveBtn) saveBtn.textContent = '수정 저장';
-    sel.value = defect.processId || '';
-    document.getElementById('defect-type').value = defect.type || '';
-    document.getElementById('defect-qty').value = defect.qty ?? 0;
-    document.getElementById('defect-total').value = defect.total ?? '';
-    document.getElementById('defect-remark').value = defect.remark || '';
-  } else {
-    editingDefectId = null;
-    if(title) title.textContent = 'Run&Rate 기록 추가';
-    if(saveBtn) saveBtn.textContent = '결과 저장';
-    document.getElementById('defect-type').value='';
-    document.getElementById('defect-qty').value=0;
-    document.getElementById('defect-total').value='';
-    document.getElementById('defect-remark').value='';
-  }
-  openModal('modal-defect');
-}
 
 document.querySelectorAll('[data-close]').forEach(btn=>{
   btn.addEventListener('click', ()=> closeModal(btn.dataset.close));
@@ -2382,22 +2316,6 @@ function attachContentEvents(proj){
       }catch(e){ toast('초기화 실패: '+e.message, 'error'); }
     });
   });
-  const openDefectBtn = document.getElementById('btn-open-defect-modal');
-  if(openDefectBtn) openDefectBtn.addEventListener('click', ()=> openDefectModal(proj, null));
-  document.querySelectorAll('[data-edit-defect]').forEach(el=>{
-    el.addEventListener('click', ()=>{
-      const d = proj.defects.find(x=>x.id===el.dataset.editDefect);
-      if(d) openDefectModal(proj, d);
-    });
-  });
-  document.querySelectorAll('[data-del-defect]').forEach(el=>{
-    el.addEventListener('click', async ()=>{
-      const id = el.dataset.delDefect;
-      try{
-        await fb.deleteDoc(fb.doc(defectsCol(proj.id), id));
-      }catch(e){ toast('삭제 실패: '+e.message, 'error'); }
-    });
-  });
   const expDefBtn = document.getElementById('btn-export-defects');
   if(expDefBtn) expDefBtn.addEventListener('click', ()=> exportDefectsCSV(proj));
 }
@@ -2527,38 +2445,6 @@ function recordLap(proj){
   state.timer.startTs = Date.now(); // lap reset
   // 측정기록 갱신은 Firestore 리스너가 처리. 타이머 표시 상태(러닝중)는 그대로 유지.
 }
-
-// ---- Defect save ----
-document.getElementById('btn-save-defect').addEventListener('click', async ()=>{
-  const proj = activeProject();
-  const processId = document.getElementById('defect-proc').value;
-  const type = document.getElementById('defect-type').value.trim();
-  const qty = Number(document.getElementById('defect-qty').value);
-  const total = document.getElementById('defect-total').value;
-  const remark = document.getElementById('defect-remark').value.trim();
-  if(!processId || qty < 0){ toast('공정을 확인하세요', 'error'); return; }
-  const defectType = type || (qty === 0 ? '불량없음' : '미분류');
-  try{
-    if(editingDefectId){
-      const prev = proj.defects.find(d=>d.id===editingDefectId);
-      await fb.updateDoc(fb.doc(defectsCol(proj.id), editingDefectId), {
-        ts: prev?.ts || Date.now(),
-        processId,
-        type: defectType,
-        qty,
-        total: total?Number(total):null,
-        remark
-      });
-    } else {
-      await fb.addDoc(defectsCol(proj.id), { ts: Date.now(), processId, type: defectType, qty, total: total?Number(total):null, remark });
-    }
-    closeModal('modal-defect');
-    editingDefectId = null;
-    toast('불량 기록이 저장되었습니다', 'success');
-  }catch(e){
-    toast('저장 실패: ' + e.message, 'error');
-  }
-});
 
 // ---- Sidebar collapse ----
 function setSidebarOpen(open){
