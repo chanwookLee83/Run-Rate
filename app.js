@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v33'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v34'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -429,10 +429,18 @@ function processDefectSummaryList(proj){
       return (isNaN(v) || v < 0) ? m : Math.max(m, v);
     }, 0);
     const autoDefect = list.reduce((s,d)=>s+Number(d.qty||0),0);
+    // 자동계산 시에도 불량 이력을 유형(type)별로 묶어 트리로 보여준다.
+    const autoByType = {};
+    list.forEach(d=>{
+      const t = d.type || '미분류';
+      autoByType[t] = (autoByType[t]||0) + Number(d.qty||0);
+    });
+    const autoDefects = Object.entries(autoByType).filter(([,qty])=>qty>0).map(([type,qty])=>({type,qty}));
     const ov = overrides[p.id];
     const overridden = !!ov;
     const produced = overridden ? Math.max(0, Number(ov.produced)||0) : autoProduced;
     const defect = overridden ? Math.max(0, Number(ov.defect)||0) : autoDefect;
+    const defects = overridden ? (Array.isArray(ov.defects) ? ov.defects : (ov.defectType||ov.defect ? [{type:ov.defectType||'', qty:ov.defect||0}] : [])) : autoDefects;
     const good = Math.max(produced - defect, 0);
     const defectRate = produced>0 ? round((defect/produced)*100,3) : null;
     const yieldRate = produced>0 ? round((good/produced)*100,3) : null;
@@ -447,7 +455,7 @@ function processDefectSummaryList(proj){
       produced,
       good,
       defect,
-      defectType: overridden ? (ov.defectType || '') : '',
+      defects,
       defectRate,
       yieldRate,
       ratePct: r.ratePct,
@@ -1449,14 +1457,18 @@ function renderHistoryTab(proj){
     <div class="panel-body" style="padding:0; overflow-x:auto; -webkit-overflow-scrolling:touch;">
       ${procRows.length===0 ? `<div class="mini-empty"><p>등록된 공정이 없습니다.</p></div>` : `
       <table class="data-table">
-        <thead><tr><th>공정</th><th>생산수량(EA)</th><th>양품수량(EA)</th><th>불량수량(EA)</th><th>불량명</th><th>불량률(%)</th><th>수율(%)</th><th>Rate%(RunRate)</th><th>목표대비 진척률(%)</th><th></th></tr></thead>
+        <thead><tr><th>공정</th><th>생산수량(EA)</th><th>양품수량(EA)</th><th>불량수량(EA)</th><th>불량 내역</th><th>불량률(%)</th><th>수율(%)</th><th>Rate%(RunRate)</th><th>목표대비 진척률(%)</th><th></th></tr></thead>
         <tbody>
         ${procRows.map(r=>`<tr>
           <td>${r.seq}. ${escapeHtml(r.name)}${r.overridden?' <span class="ph-tag" style="font-size:9px; vertical-align:middle;">수동입력</span>':''}</td>
           <td><input type="number" min="0" step="1" class="qd-input ${r.overridden?'qd-overridden':''}" data-qd-field="produced" data-qd-process="${r.processId}" value="${r.produced}"></td>
           <td>${r.good}</td>
-          <td><input type="number" min="0" step="1" class="qd-input ${r.overridden?'qd-overridden':''}" data-qd-field="defect" data-qd-process="${r.processId}" value="${r.defect}"></td>
-          <td><input type="text" class="qd-input ${r.overridden?'qd-overridden':''}" style="width:110px; text-align:left; font-family:'Inter';" placeholder="예: 치수불량" data-qd-field="defectType" data-qd-process="${r.processId}" value="${escapeHtml(r.defectType||'')}"></td>
+          <td class="mono">${r.defect}</td>
+          <td>${r.defects.length===0 ? `<span style="color:var(--gauge-grey);">—</span>` : `
+            <div class="qd-defect-tree">
+              ${r.defects.map((d,i)=>`<div class="qd-defect-item">${i===r.defects.length-1?'└':'├'} ${escapeHtml(d.type||'미분류')} <span class="mono" style="color:var(--red); font-weight:600;">${d.qty}</span></div>`).join('')}
+            </div>`}
+          </td>
           <td>${r.defectRate??'—'}</td>
           <td>${r.yieldRate??'—'}</td>
           <td>${r.ratePct??'—'}</td>
@@ -1477,7 +1489,7 @@ function renderHistoryTab(proj){
         </tr>`).join('')}
         </tbody>
       </table>
-      <p style="font-size:11px; color:var(--gauge-grey); padding:10px 14px;">생산수량·불량수량·불량명을 직접 입력하고 체크(✓)로 저장하면 해당 공정에 고정됩니다. 이전에 기록된 불량 이력이 있는 공정은 그 이력 기준으로 자동 계산된 값이 기본으로 표시되며, 되돌리기(↺)로 언제든 그 자동계산 값으로 복원할 수 있습니다.</p>`}
+      <p style="font-size:11px; color:var(--gauge-grey); padding:10px 14px;">생산수량은 직접 입력 후 체크(✓)로 저장합니다. 불량수량·내역은 ≡ 아이콘으로 유형별로 나눠 입력하며, 합계가 자동으로 불량수량에 반영됩니다. 이전에 기록된 불량 이력이 있는 공정은 유형별로 묶어 자동 계산된 값이 기본으로 표시되며, 되돌리기(↺)로 언제든 복원할 수 있습니다.</p>`}
     </div>
   </div>`;
 }
@@ -1609,13 +1621,13 @@ function exportDefectsCSV(proj){
 
   const procRows = processDefectSummaryList(proj);
   csvSection(rows, '공정별 품질 상세');
-  rows.push(['공정','생산수량(EA)','양품수량(EA)','불량수량(EA)','불량명','불량률(%)','수율(%)','RunRate(%)','목표대비 진척률(%)']);
+  rows.push(['공정','생산수량(EA)','양품수량(EA)','불량수량(EA)','불량 내역','불량률(%)','수율(%)','RunRate(%)','목표대비 진척률(%)']);
   procRows.forEach(r=> rows.push([
     `${r.seq}. ${r.name}`,
     r.produced,
     r.good,
     r.defect,
-    r.defectType||'',
+    r.defects.map(d=>`${d.type||'미분류'} ${d.qty}`).join(' / '),
     r.defectRate??'—',
     r.yieldRate??'—',
     r.ratePct??'—',
@@ -2027,10 +2039,8 @@ function openQualityBreakdownModal(proj, processId){
   document.getElementById('qb-proc-name').textContent = `${proc.seq}. ${proc.name}`;
   const rowsWrap = document.getElementById('qb-rows');
   rowsWrap.innerHTML = '';
-  const ov = (proj.qualityOverrides||{})[processId];
-  const seedRows = (ov && Array.isArray(ov.defects) && ov.defects.length>0)
-    ? ov.defects
-    : (ov && (ov.defect || ov.defectType) ? [{ type: ov.defectType||'', qty: ov.defect||0 }] : []);
+  const current = processDefectSummaryList(proj).find(r=>r.processId===processId);
+  const seedRows = current ? current.defects : [];
   if(seedRows.length===0){ addQbRow('', 0); } else { seedRows.forEach(d=> addQbRow(d.type, d.qty)); }
   updateQbTotal();
   openModal('modal-quality-breakdown');
@@ -2047,13 +2057,12 @@ document.getElementById('btn-save-qb').addEventListener('click', async ()=>{
   const produced = producedInp ? Math.max(0, Math.round(Number(producedInp.value) || 0)) : 0;
   const defect = rows.reduce((s,d)=>s+d.qty, 0);
   if(defect > produced){ toast('불량수량 합계가 생산수량보다 클 수 없습니다', 'error'); return; }
-  const defectType = rows.map(d=> d.type ? `${d.type} ${d.qty}` : `${d.qty}`).join(', ');
   const btn = document.getElementById('btn-save-qb');
   btn.disabled = true;
   try{
-    await fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { [`qualityOverrides.${qbProcessId}`]: { produced, defect, defectType, defects: rows } });
+    await fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { [`qualityOverrides.${qbProcessId}`]: { produced, defect, defects: rows } });
     proj.qualityOverrides = proj.qualityOverrides || {};
-    proj.qualityOverrides[qbProcessId] = { produced, defect, defectType, defects: rows };
+    proj.qualityOverrides[qbProcessId] = { produced, defect, defects: rows };
     closeModal('modal-quality-breakdown');
     toast('불량 유형별 내역이 저장되었습니다', 'success');
     renderContent();
@@ -2351,22 +2360,20 @@ function attachContentEvents(proj){
   });
 
   // history tab
-  // 공정별 품질 상세 - 생산수량/불량수량 직접 수정
+  // 공정별 품질 상세 - 생산수량 직접 수정 (불량 내역은 ≡ 아이콘의 유형별 입력 모달에서 관리)
   document.querySelectorAll('[data-save-quality]').forEach(el=>{
     el.addEventListener('click', async ()=>{
       const pid = el.dataset.saveQuality;
       const producedInp = document.querySelector(`[data-qd-field="produced"][data-qd-process="${pid}"]`);
-      const defectInp = document.querySelector(`[data-qd-field="defect"][data-qd-process="${pid}"]`);
-      const defectTypeInp = document.querySelector(`[data-qd-field="defectType"][data-qd-process="${pid}"]`);
       const produced = Math.max(0, Math.round(Number(producedInp.value) || 0));
-      const defect = Math.max(0, Math.round(Number(defectInp.value) || 0));
-      const defectType = defectTypeInp ? defectTypeInp.value.trim() : '';
-      if(defect > produced){ toast('불량수량이 생산수량보다 클 수 없습니다', 'error'); return; }
-      const defects = defect>0 || defectType ? [{ type: defectType, qty: defect }] : [];
+      const current = processDefectSummaryList(proj).find(r=>r.processId===pid);
+      const defect = current ? current.defect : 0;
+      const defects = current ? current.defects : [];
+      if(defect > produced){ toast('생산수량이 현재 불량수량보다 작을 수 없습니다', 'error'); return; }
       try{
-        await fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { [`qualityOverrides.${pid}`]: { produced, defect, defectType, defects } });
+        await fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { [`qualityOverrides.${pid}`]: { produced, defect, defects } });
         proj.qualityOverrides = proj.qualityOverrides || {};
-        proj.qualityOverrides[pid] = { produced, defect, defectType, defects };
+        proj.qualityOverrides[pid] = { produced, defect, defects };
         toast('공정별 품질 상세가 수정되었습니다', 'success');
         renderContent();
       }catch(e){ toast('저장 실패: '+e.message, 'error'); }
