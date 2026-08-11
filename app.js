@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v21'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v22'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -532,6 +532,7 @@ function renderSidebar(){
     return `<div class="proj-item ${p.id===state.activeProjectId?'active':''}" data-id="${p.id}">
       <div class="pn">${escapeHtml(p.pn)}</div>
       <div class="pname">${escapeHtml(p.pname)}</div>
+      ${p.remark ? `<div class="premark" title="${escapeHtml(p.remark)}">${escapeHtml(p.remark)}</div>` : ''}
       <div class="pmeta">
         <span>공정 ${p.procCount}개</span>
         <span class="chip ${chipClass}">${chipLabel}</span>
