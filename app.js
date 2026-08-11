@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v23'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v24'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -288,6 +288,7 @@ function computeRate(proj, processId){
 
 // ---------- 4M 이상 사유 분석 ----------
 const FOUR_M_REASONS = ['설비','사람','방법','자재'];
+const FOUR_M_COLORS = { '설비':'var(--m4-eq)', '사람':'var(--m4-man)', '방법':'var(--m4-method)', '자재':'var(--m4-material)' };
 
 function compute4mSummary(proj, processId){
   const cycles = getCycles(proj, processId); // ts 오름차순
@@ -934,7 +935,7 @@ function renderCycleTableBody(cycles){
       const reasons = c.reasons || [];
       const abnormal = reasons.length>0;
       const checks = FOUR_M_REASONS.map(reason=>
-        `<label><input type="radio" name="m4-reason-${c.id}" data-cycle-id="${c.id}" data-reason="${reason}" ${reasons.includes(reason)?'checked':''}>${reason}</label>`
+        `<label style="color:${FOUR_M_COLORS[reason]};"><input type="radio" name="m4-reason-${c.id}" data-cycle-id="${c.id}" data-reason="${reason}" style="accent-color:${FOUR_M_COLORS[reason]};" ${reasons.includes(reason)?'checked':''}>${reason}</label>`
       ).join('');
       return `<tr class="${abnormal?'m4-abnormal':''}"><td>${cycles.length-i}</td><td>${fmtDate(c.ts)}</td><td>${c.ct.toFixed(2)}</td><td><div class="m4-check-group">${checks}</div></td><td><input type="text" class="m4-note-inp" data-note-cycle-id="${c.id}" value="${escapeHtml(c.note||'')}" placeholder="사유 상세 메모"></td><td class="del-cell" data-del-cycle="${c.id}">삭제</td></tr>`;
     }).join('')}
@@ -959,8 +960,13 @@ function bindCycleTableEvents(container, projId){
     });
     el.addEventListener('change', async ()=>{
       const reasons = el.checked ? [el.dataset.reason] : [];
+      const payload = reasons.length===0 ? { reasons, note: '' } : { reasons };
       try{
-        await fb.updateDoc(fb.doc(cyclesCol(projId), el.dataset.cycleId), { reasons });
+        await fb.updateDoc(fb.doc(cyclesCol(projId), el.dataset.cycleId), payload);
+        if(reasons.length===0){
+          const noteInp = container.querySelector(`[data-note-cycle-id="${el.dataset.cycleId}"]`);
+          if(noteInp) noteInp.value = '';
+        }
       }catch(e){ toast('저장 실패: '+e.message, 'error'); }
     });
   });
@@ -996,9 +1002,9 @@ function render4mPanel(proj, proc){
           const w = Math.max(3, (m4.counts[k]/maxCount)*100);
           const isActive = activeFilter===k;
           return `<div class="rate-bar-row m4-filter-row ${isActive?'active':''}" data-m4-filter="${k}" title="클릭하면 ${k} 사유만 필터링됩니다">
-            <div class="rate-bar-label">${k}${isActive?' ✓':''}</div>
+            <div class="rate-bar-label" style="color:${FOUR_M_COLORS[k]};">${k}${isActive?' ✓':''}</div>
             <div style="height:10px; background:#ECE9E0; border-radius:999px; overflow:hidden;">
-              <div style="width:${m4.counts[k]>0?w:0}%; height:100%; background:var(--red);"></div>
+              <div style="width:${m4.counts[k]>0?w:0}%; height:100%; background:${FOUR_M_COLORS[k]};"></div>
             </div>
             <div class="mono rate-bar-val">${m4.counts[k]}건</div>
           </div>`;
@@ -1015,7 +1021,7 @@ function render4mPanel(proj, proc){
           ${list.length===0? `<div class="mini-empty" style="padding:16px;"><p>${activeFilter} 사유로 태깅된 랩이 없습니다.</p></div>` : list.map(c=>`
           <div class="history-row" style="padding:9px 4px;">
             <div>
-              <div class="h-main">${fmtDate(c.ts)} · ${c.ct.toFixed(2)}초 <span style="color:var(--red); font-weight:600;">[${c.reasons.join(', ')}]</span> · 조치시간 ${c.actionTimeSec!==null? c.actionTimeSec+'초' : `<span style="color:var(--amber);">조치중</span>`}</div>
+              <div class="h-main">${fmtDate(c.ts)} · ${c.ct.toFixed(2)}초 <span style="color:${FOUR_M_COLORS[c.reasons[0]]||'var(--red)'}; font-weight:600;">[${c.reasons.join(', ')}]</span> · 조치시간 ${c.actionTimeSec!==null? c.actionTimeSec+'초' : `<span style="color:var(--amber);">조치중</span>`}</div>
               ${c.note ? `<div class="h-sub">${escapeHtml(c.note)}</div>` : ''}
             </div>
           </div>`).join('')}
