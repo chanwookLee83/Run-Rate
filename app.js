@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v28'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v29'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -345,14 +345,34 @@ function capaInsight(ratePct, n, hasTargetCt){
 }
 
 // 표본(정상 사이클) 몇 건이면 평균이 통계적으로 충분히 안정적인지 자동 판단.
-// 시간연구(time study)의 표준 공식 N = (Z·CV/E)^2 사용: 95% 신뢰수준, 허용오차 ±5% 기준으로
-// 지금까지의 변동(CV=표준편차/평균)에서 필요한 최소 표본수를 역산하고, 현재 측정건수와 비교한다.
-function computeSampleSufficiency(r){
-  const Z = 1.96, E = 0.05, MIN_N = 5;
-  if(!r || r.n===0 || !r.avgCt || r.stdCt===null) return { requiredN: MIN_N, isSufficient: false, cvPct: null, n:0 };
+// 시간연구(time study)의 표준 공식 N = (Z·CV/E)^2 사용. 현장 스톱워치 측정에서 통용되는
+// "90% 신뢰수준 · 오차 ±10%" 조합을 기본값으로 쓴다(95%·±5%는 실측 랩 수백 건이 필요해 비현실적).
+// 변동계수(CV)가 지나치게 크면(예: 이상 랩이 태깅 안 된 채 섞여있는 경우) 표본을 늘리라고 안내하는 대신
+// 이상치부터 점검하라고 안내한다 — 안 그러면 필요 표본수가 수만 건으로 튀어 의미가 없어진다.
+function sampleSufficiencyInsight(r){
+  const Z = 1.645, E = 0.10, MIN_N = 5, HIGH_CV = 0.5;
+  if(!r || r.n===0 || !r.avgCt || r.stdCt===null){
+    return { tone:'warn', title:'측정 데이터 부족', msg:'사이클타임을 먼저 측정하세요.' };
+  }
   const cv = r.stdCt / r.avgCt;
+  const cvPct = round(cv*100,1);
+  if(cv > HIGH_CV){
+    return {
+      tone:'bad', title:`변동 과다 (변동계수 ${cvPct}%)`,
+      msg:'표본을 늘리기보다 비정상적으로 길거나 짧은 랩이 섞여있는지 먼저 확인하세요. 그런 랩은 "4M 이상 사유"로 태깅하면 평균 계산에서 자동 제외됩니다.'
+    };
+  }
   const requiredN = Math.max(MIN_N, cv>0 ? Math.ceil(Math.pow((Z*cv)/E, 2)) : MIN_N);
-  return { requiredN, isSufficient: r.n >= requiredN, cvPct: round(cv*100,1), n: r.n };
+  if(r.n >= requiredN){
+    return {
+      tone:'good', title:`측정 충분 (${r.n}건, 권장 ${requiredN}건 이상)`,
+      msg:`변동계수 ${cvPct}% 기준(90% 신뢰수준·오차 ±10%)으로 필요한 최소 표본을 충족했습니다.`
+    };
+  }
+  return {
+    tone:'warn', title:`측정 더 필요 (현재 ${r.n}건 / 권장 ${requiredN}건)`,
+    msg:`변동계수 ${cvPct}% 기준(90% 신뢰수준·오차 ±10%)으로 ${requiredN-r.n}건 더 측정을 권장합니다.`
+  };
 }
 
 function projectOverallRate(proj){
@@ -1082,7 +1102,7 @@ function renderAnalysisTab(proj){
   const r = computeRate(proj, proc.id);
   const cap = computeCapacity(proj, proc.id);
   const insight = capaInsight(r.ratePct, r.n, !!(proc.targetCt && proc.targetCt>0));
-  const sample = computeSampleSufficiency(r);
+  const sample = sampleSufficiencyInsight(r);
   const ctGapSec = (proc.targetCt && r.avgCt!==null) ? round(proc.targetCt - r.avgCt, 2) : null;
   const cycles = getCycles(proj, proc.id).slice().reverse();
 
@@ -1149,8 +1169,8 @@ function renderAnalysisTab(proj){
       </div>
       <div class="history-row" style="border:1px solid var(--line); border-radius:8px; margin-top:8px;">
         <div>
-          <div class="h-main"><span class="status-dot ${sample.isSufficient?'good':'warn'}"></span>${sample.isSufficient? `측정 충분 (${sample.n}건, 권장 ${sample.requiredN}건 이상)` : `측정 더 필요 (현재 ${sample.n}건 / 권장 ${sample.requiredN}건)`}</div>
-          <div class="h-sub">${sample.cvPct!==null? `현재 변동계수(σ/평균) ${sample.cvPct}% 기준, 95% 신뢰수준·오차 ±5%에서 필요한 최소 표본수입니다.` : '사이클타임을 먼저 측정하세요.'}${!sample.isSufficient? ` ${Math.max(0, sample.requiredN - sample.n)}건 더 측정을 권장합니다.` : ''}</div>
+          <div class="h-main"><span class="status-dot ${sample.tone}"></span>${sample.title}</div>
+          <div class="h-sub">${sample.msg}</div>
         </div>
       </div>
     </div>
