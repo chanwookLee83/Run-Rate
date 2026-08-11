@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v19'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v20'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -278,18 +278,25 @@ function computeRate(proj, processId){
 const FOUR_M_REASONS = ['설비','사람','방법','자재'];
 
 function compute4mSummary(proj, processId){
-  const cycles = getCycles(proj, processId);
-  const abnormal = cycles.filter(c=> c.reasons && c.reasons.length>0);
+  const cycles = getCycles(proj, processId); // ts 오름차순
+  // 조치 시간: 이상 태깅된 랩의 시각으로부터 "다음 랩" 기록 시각까지의 간격을 자동 계산 (다음 랩이 아직 없으면 null = 조치 중)
+  const abnormal = cycles
+    .map((c,idx)=> ({ ...c, actionTimeSec: (idx+1<cycles.length) ? round((cycles[idx+1].ts - c.ts)/1000, 1) : null }))
+    .filter(c=> c.reasons && c.reasons.length>0);
   const counts = {}; FOUR_M_REASONS.forEach(k=> counts[k]=0);
   abnormal.forEach(c=> c.reasons.forEach(r=>{ if(counts[r]!==undefined) counts[r]++; }));
   const baseline = computeRate(proj, processId).avgCt;
   let extraTimeSec = 0;
   abnormal.forEach(c=>{ if(baseline!==null && Number(c.ct) > baseline) extraTimeSec += (Number(c.ct) - baseline); });
+  const knownActionTimes = abnormal.map(c=>c.actionTimeSec).filter(v=>v!==null);
+  const totalActionTimeSec = knownActionTimes.length ? round(knownActionTimes.reduce((a,b)=>a+b,0), 1) : null;
+  const avgActionTimeSec = knownActionTimes.length ? round(totalActionTimeSec/knownActionTimes.length, 1) : null;
+  const openActionCount = abnormal.length - knownActionTimes.length;
   const totalCycles = cycles.length;
   const ratio = totalCycles>0 ? round(abnormal.length/totalCycles*100, 1) : null;
   let topReason = null, topCount = 0;
   FOUR_M_REASONS.forEach(k=>{ if(counts[k]>topCount){ topCount=counts[k]; topReason=k; } });
-  return { abnormal, counts, totalCycles, abnormalCount: abnormal.length, ratio, extraTimeSec: round(extraTimeSec,1), topReason, baseline };
+  return { abnormal, counts, totalCycles, abnormalCount: abnormal.length, ratio, extraTimeSec: round(extraTimeSec,1), topReason, baseline, totalActionTimeSec, avgActionTimeSec, openActionCount };
 }
 
 function processManpower(proc){
@@ -960,9 +967,10 @@ function render4mPanel(proj, proc){
   <div class="panel">
     <div class="panel-head"><h3>4M 이상 원인 분석</h3><span class="ph-tag">${m4.abnormalCount}건 / 전체 ${m4.totalCycles}건</span></div>
     <div class="panel-body">
-      <div class="kpi-strip cols-3" style="margin-bottom:12px;">
+      <div class="kpi-strip cols-4" style="margin-bottom:12px;">
         <div class="kpi-card"><div class="kpi-label">이상 발생 비율</div><div class="kpi-value">${m4.ratio??'—'}<span class="kpi-unit">%</span></div></div>
         <div class="kpi-card"><div class="kpi-label">이상으로 인한 손실시간</div><div class="kpi-value">${m4.extraTimeSec}<span class="kpi-unit">초</span></div></div>
+        <div class="kpi-card"><div class="kpi-label">평균 조치시간</div><div class="kpi-value">${m4.avgActionTimeSec??'—'}<span class="kpi-unit">초</span></div><div class="kpi-sub">${m4.openActionCount>0?`${m4.openActionCount}건 조치중`:(m4.totalActionTimeSec!==null?`총 ${m4.totalActionTimeSec}초`:'—')}</div></div>
         <div class="kpi-card"><div class="kpi-label">최다 원인</div><div class="kpi-value" style="font-size:18px;">${m4.topReason??'—'}</div></div>
       </div>
       ${m4.totalCycles===0 ? `<div class="mini-empty"><p>측정 데이터가 없습니다.</p></div>` : `
@@ -979,7 +987,7 @@ function render4mPanel(proj, proc){
           </div>`;
         }).join('')}
       </div>
-      <p style="font-size:11px; color:var(--gauge-grey); margin-top:10px;">4M 사유가 태깅된 랩은 이상치로 분류되어 평균 C/T·Rate%·CAPA 계산에서 자동 제외되고, 여기에서만 별도 집계됩니다. 손실시간은 정상 평균 C/T(${m4.baseline??'—'}초) 초과분의 합입니다. 위 막대를 클릭하면 해당 사유의 코멘트만 걸러볼 수 있습니다.</p>
+      <p style="font-size:11px; color:var(--gauge-grey); margin-top:10px;">4M 사유가 태깅된 랩은 이상치로 분류되어 평균 C/T·Rate%·CAPA 계산에서 자동 제외되고, 여기에서만 별도 집계됩니다. 손실시간은 정상 평균 C/T(${m4.baseline??'—'}초) 초과분의 합이고, 조치시간은 이상 랩부터 다음 랩이 기록될 때까지의 시간을 자동 계산한 값입니다(다음 랩이 아직 없으면 "조치중"). 위 막대를 클릭하면 해당 사유의 코멘트만 걸러볼 수 있습니다.</p>
       ${m4.abnormal.length>0 ? `
       <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
         <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
@@ -990,7 +998,7 @@ function render4mPanel(proj, proc){
           ${list.length===0? `<div class="mini-empty" style="padding:16px;"><p>${activeFilter} 사유로 태깅된 랩이 없습니다.</p></div>` : list.map(c=>`
           <div class="history-row" style="padding:9px 4px;">
             <div>
-              <div class="h-main">${fmtDate(c.ts)} · ${c.ct.toFixed(2)}초 <span style="color:var(--red); font-weight:600;">[${c.reasons.join(', ')}]</span></div>
+              <div class="h-main">${fmtDate(c.ts)} · ${c.ct.toFixed(2)}초 <span style="color:var(--red); font-weight:600;">[${c.reasons.join(', ')}]</span> · 조치시간 ${c.actionTimeSec!==null? c.actionTimeSec+'초' : `<span style="color:var(--amber);">조치중</span>`}</div>
               ${c.note ? `<div class="h-sub">${escapeHtml(c.note)}</div>` : ''}
             </div>
           </div>`).join('')}
@@ -1464,13 +1472,15 @@ function exportCyclesCSV(proj, proc){
   rows.push(['정상 측정건수', r.n, '전체 측정건수', r.nTotal]);
   rows.push([]);
   const m4 = compute4mSummary(proj, proc.id);
+  const actionTimeById = {}; m4.abnormal.forEach(c=>{ actionTimeById[c.id] = c.actionTimeSec; });
   csvSection(rows, '4M 이상 원인 분석');
   rows.push(['이상 발생 건수', m4.abnormalCount, '이상 발생 비율(%)', m4.ratio??'—', '손실시간(초)', m4.extraTimeSec]);
+  rows.push(['평균 조치시간(초)', m4.avgActionTimeSec??'—', '총 조치시간(초)', m4.totalActionTimeSec??'—', '조치중(다음랩 대기)', m4.openActionCount]);
   rows.push(['설비', m4.counts['설비'], '사람', m4.counts['사람'], '방법', m4.counts['방법'], '자재', m4.counts['자재']]);
   rows.push([]);
   csvSection(rows, '측정 상세');
-  rows.push(['No','측정시각','사이클타임(초)','4M 이상 사유','코멘트']);
-  cycles.forEach((c,i)=> rows.push([i+1, fmtDate(c.ts), c.ct, (c.reasons&&c.reasons.length)?c.reasons.join('/'):'', c.note||'']));
+  rows.push(['No','측정시각','사이클타임(초)','4M 이상 사유','코멘트','조치시간(초)']);
+  cycles.forEach((c,i)=> rows.push([i+1, fmtDate(c.ts), c.ct, (c.reasons&&c.reasons.length)?c.reasons.join('/'):'', c.note||'', actionTimeById[c.id]??'']));
   rows.push([]);
   rows.push(['비고', 'Rate(%) = 목표 C/T ÷ 실측 평균 C/T × 100 (4M 이상 사유가 태깅된 랩은 제외)']);
   downloadCSV(`RunRate_${proj.pn}_${proc.name}_사이클타임_${fmtDateShort(nowISO())}.csv`, rows);
