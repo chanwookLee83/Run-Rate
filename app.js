@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v20'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v21'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -117,6 +117,8 @@ function subscribeProjects(){
         capDaysPerMonth: data.capDaysPerMonth ?? 22,
         capEfficiencyPct: data.capEfficiencyPct ?? 100,
         qualityOverrides: data.qualityOverrides || {},
+        // 사이드바 상태칩(정상/주의/경고)을 서브컬렉션을 열지 않아도 정확히 표시하기 위해 저장된 요약값
+        statusSummary: data.statusSummary ?? null,
         // 상세 서브컬렉션은 별도 리스너가 채움. 기존 값 보존(프로젝트 목록 갱신 시 상세 날아가지 않게).
         processes: existing? existing.processes : [],
         cycles: existing? existing.cycles : {},
@@ -238,6 +240,16 @@ function projectStatus(proj){
     else if(s==='warn' && worst!=='bad') worst='warn';
   });
   return worst;
+}
+
+// 현재 열려있는(서브컬렉션이 실제로 로딩된) 프로젝트의 상태를 계산해 프로젝트 문서에 저장.
+// 사이드바는 이 값을 읽어 다른 프로젝트를 열지 않고도 정상/주의/경고를 정확히 표시할 수 있다.
+function syncProjectStatusSummary(proj){
+  const status = projectStatus(proj);
+  if(proj.statusSummary !== status){
+    proj.statusSummary = status;
+    fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { statusSummary: status }).catch(()=>{});
+  }
 }
 
 // ---------- Cycle time / Rate calculations ----------
@@ -509,8 +521,12 @@ function renderSidebar(){
     list.innerHTML = '<div class="sb-empty">등록된 프로젝트가 없습니다.<br>상단의 "신규" 버튼으로<br>품번 프로젝트를 생성하세요.</div>';
     return;
   }
+  // 현재 열려있는 프로젝트는 서브컬렉션이 실제 로딩되어 있으므로, 그 상태를 정확히 계산해 문서에 동기화해둔다.
+  const activeForSync = getProject(state.activeProjectId);
+  if(activeForSync) syncProjectStatusSummary(activeForSync);
   list.innerHTML = DB.projects.slice().sort((a,b)=> b.createdAt.localeCompare(a.createdAt)).map(p=>{
-    const status = projectStatus(p);
+    // 활성 프로젝트는 방금 계산한 실시간 상태를, 그 외는 저장된 요약값(없으면 로컬 계산으로 폴백)을 사용
+    const status = (p.id===state.activeProjectId) ? projectStatus(p) : (p.statusSummary || projectStatus(p));
     const chipClass = status==='good'?'chip-green':status==='warn'?'chip-amber':'chip-red';
     const chipLabel = status==='good'?'정상':status==='warn'?'주의':'경고';
     return `<div class="proj-item ${p.id===state.activeProjectId?'active':''}" data-id="${p.id}">

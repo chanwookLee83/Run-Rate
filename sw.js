@@ -1,4 +1,4 @@
-const CACHE_NAME = 'runrate-cache-v20';
+const CACHE_NAME = 'runrate-cache-v21';
 const ASSETS = [
   './',
   './index.html',
