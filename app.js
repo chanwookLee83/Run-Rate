@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v32'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v33'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -1466,6 +1466,9 @@ function renderHistoryTab(proj){
               <div class="icon-mini" data-save-quality="${r.processId}" title="입력한 값으로 저장">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
               </div>
+              <div class="icon-mini" data-open-breakdown="${r.processId}" title="불량을 여러 유형으로 나눠 입력">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              </div>
               ${r.overridden?`<div class="icon-mini" data-reset-quality="${r.processId}" title="불량 이력 기준 자동계산으로 되돌리기">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
               </div>`:''}
@@ -1995,6 +1998,69 @@ document.getElementById('btn-save-process').addEventListener('click', async ()=>
   }
 });
 
+// ---- Quality breakdown modal (한 공정의 불량을 유형별로 나눠 입력) ----
+let qbProcessId = null;
+function renderQbRow(type, qty){
+  const row = document.createElement('div');
+  row.className = 'proc-input-row';
+  row.innerHTML = `
+    <input type="text" placeholder="불량 유형 (예: 치수불량)" class="qb-type-inp" value="${escapeHtml(type||'')}">
+    <input type="number" min="0" step="1" class="qb-qty-inp mono" style="max-width:90px;" placeholder="수량" value="${qty||0}">
+    <div class="icon-mini btn-remove-row" title="삭제">&times;</div>
+  `;
+  row.querySelector('.qb-qty-inp').addEventListener('input', updateQbTotal);
+  row.querySelector('.btn-remove-row').addEventListener('click', ()=>{ row.remove(); updateQbTotal(); });
+  return row;
+}
+function addQbRow(type, qty){
+  document.getElementById('qb-rows').appendChild(renderQbRow(type, qty));
+}
+function updateQbTotal(){
+  const total = Array.from(document.querySelectorAll('#qb-rows .qb-qty-inp')).reduce((s,el)=> s + (Number(el.value)||0), 0);
+  const totalEl = document.getElementById('qb-total');
+  if(totalEl) totalEl.textContent = total;
+}
+function openQualityBreakdownModal(proj, processId){
+  const proc = proj.processes.find(p=>p.id===processId);
+  if(!proc) return;
+  qbProcessId = processId;
+  document.getElementById('qb-proc-name').textContent = `${proc.seq}. ${proc.name}`;
+  const rowsWrap = document.getElementById('qb-rows');
+  rowsWrap.innerHTML = '';
+  const ov = (proj.qualityOverrides||{})[processId];
+  const seedRows = (ov && Array.isArray(ov.defects) && ov.defects.length>0)
+    ? ov.defects
+    : (ov && (ov.defect || ov.defectType) ? [{ type: ov.defectType||'', qty: ov.defect||0 }] : []);
+  if(seedRows.length===0){ addQbRow('', 0); } else { seedRows.forEach(d=> addQbRow(d.type, d.qty)); }
+  updateQbTotal();
+  openModal('modal-quality-breakdown');
+}
+document.getElementById('btn-qb-add-row').addEventListener('click', ()=> { addQbRow('', 0); updateQbTotal(); });
+document.getElementById('btn-save-qb').addEventListener('click', async ()=>{
+  const proj = activeProject();
+  if(!proj || !qbProcessId) return;
+  const rows = Array.from(document.querySelectorAll('#qb-rows .proc-input-row')).map(row=>({
+    type: row.querySelector('.qb-type-inp').value.trim(),
+    qty: Math.max(0, Math.round(Number(row.querySelector('.qb-qty-inp').value) || 0))
+  })).filter(d=> d.type || d.qty>0);
+  const producedInp = document.querySelector(`[data-qd-field="produced"][data-qd-process="${qbProcessId}"]`);
+  const produced = producedInp ? Math.max(0, Math.round(Number(producedInp.value) || 0)) : 0;
+  const defect = rows.reduce((s,d)=>s+d.qty, 0);
+  if(defect > produced){ toast('불량수량 합계가 생산수량보다 클 수 없습니다', 'error'); return; }
+  const defectType = rows.map(d=> d.type ? `${d.type} ${d.qty}` : `${d.qty}`).join(', ');
+  const btn = document.getElementById('btn-save-qb');
+  btn.disabled = true;
+  try{
+    await fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { [`qualityOverrides.${qbProcessId}`]: { produced, defect, defectType, defects: rows } });
+    proj.qualityOverrides = proj.qualityOverrides || {};
+    proj.qualityOverrides[qbProcessId] = { produced, defect, defectType, defects: rows };
+    closeModal('modal-quality-breakdown');
+    toast('불량 유형별 내역이 저장되었습니다', 'success');
+    renderContent();
+  }catch(e){ toast('저장 실패: '+e.message, 'error'); }
+  finally{ btn.disabled = false; }
+});
+
 // ---- Tabs ----
 document.getElementById('tabs').addEventListener('click', e=>{
   const tab = e.target.closest('.tab');
@@ -2296,14 +2362,18 @@ function attachContentEvents(proj){
       const defect = Math.max(0, Math.round(Number(defectInp.value) || 0));
       const defectType = defectTypeInp ? defectTypeInp.value.trim() : '';
       if(defect > produced){ toast('불량수량이 생산수량보다 클 수 없습니다', 'error'); return; }
+      const defects = defect>0 || defectType ? [{ type: defectType, qty: defect }] : [];
       try{
-        await fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { [`qualityOverrides.${pid}`]: { produced, defect, defectType } });
+        await fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { [`qualityOverrides.${pid}`]: { produced, defect, defectType, defects } });
         proj.qualityOverrides = proj.qualityOverrides || {};
-        proj.qualityOverrides[pid] = { produced, defect, defectType };
+        proj.qualityOverrides[pid] = { produced, defect, defectType, defects };
         toast('공정별 품질 상세가 수정되었습니다', 'success');
         renderContent();
       }catch(e){ toast('저장 실패: '+e.message, 'error'); }
     });
+  });
+  document.querySelectorAll('[data-open-breakdown]').forEach(el=>{
+    el.addEventListener('click', ()=> openQualityBreakdownModal(proj, el.dataset.openBreakdown));
   });
   document.querySelectorAll('[data-reset-quality]').forEach(el=>{
     el.addEventListener('click', async ()=>{
