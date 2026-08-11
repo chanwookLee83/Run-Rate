@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v26'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v27'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -419,6 +419,7 @@ function processDefectSummaryList(proj){
       produced,
       good,
       defect,
+      defectType: overridden ? (ov.defectType || '') : '',
       defectRate,
       yieldRate,
       ratePct: r.ratePct,
@@ -1401,13 +1402,14 @@ function renderHistoryTab(proj){
     <div class="panel-body" style="padding:0; overflow-x:auto; -webkit-overflow-scrolling:touch;">
       ${procRows.length===0 ? `<div class="mini-empty"><p>등록된 공정이 없습니다.</p></div>` : `
       <table class="data-table">
-        <thead><tr><th>공정</th><th>생산수량(EA)</th><th>양품수량(EA)</th><th>불량수량(EA)</th><th>불량률(%)</th><th>수율(%)</th><th>Rate%(RunRate)</th><th>목표대비 진척률(%)</th><th></th></tr></thead>
+        <thead><tr><th>공정</th><th>생산수량(EA)</th><th>양품수량(EA)</th><th>불량수량(EA)</th><th>불량명</th><th>불량률(%)</th><th>수율(%)</th><th>Rate%(RunRate)</th><th>목표대비 진척률(%)</th><th></th></tr></thead>
         <tbody>
         ${procRows.map(r=>`<tr>
           <td>${r.seq}. ${escapeHtml(r.name)}${r.overridden?' <span class="ph-tag" style="font-size:9px; vertical-align:middle;">수동입력</span>':''}</td>
           <td><input type="number" min="0" step="1" class="qd-input ${r.overridden?'qd-overridden':''}" data-qd-field="produced" data-qd-process="${r.processId}" value="${r.produced}"></td>
           <td>${r.good}</td>
           <td><input type="number" min="0" step="1" class="qd-input ${r.overridden?'qd-overridden':''}" data-qd-field="defect" data-qd-process="${r.processId}" value="${r.defect}"></td>
+          <td><input type="text" class="qd-input ${r.overridden?'qd-overridden':''}" style="width:110px; text-align:left; font-family:'Inter';" placeholder="예: 치수불량" data-qd-field="defectType" data-qd-process="${r.processId}" value="${escapeHtml(r.defectType||'')}"></td>
           <td>${r.defectRate??'—'}</td>
           <td>${r.yieldRate??'—'}</td>
           <td>${r.ratePct??'—'}</td>
@@ -1589,12 +1591,13 @@ function exportDefectsCSV(proj){
 
   const procRows = processDefectSummaryList(proj);
   csvSection(rows, '공정별 품질 상세');
-  rows.push(['공정','생산수량(EA)','양품수량(EA)','불량수량(EA)','불량률(%)','수율(%)','RunRate(%)','목표대비 진척률(%)']);
+  rows.push(['공정','생산수량(EA)','양품수량(EA)','불량수량(EA)','불량명','불량률(%)','수율(%)','RunRate(%)','목표대비 진척률(%)']);
   procRows.forEach(r=> rows.push([
     `${r.seq}. ${r.name}`,
     r.produced,
     r.good,
     r.defect,
+    r.defectType||'',
     r.defectRate??'—',
     r.yieldRate??'—',
     r.ratePct??'—',
@@ -2265,13 +2268,15 @@ function attachContentEvents(proj){
       const pid = el.dataset.saveQuality;
       const producedInp = document.querySelector(`[data-qd-field="produced"][data-qd-process="${pid}"]`);
       const defectInp = document.querySelector(`[data-qd-field="defect"][data-qd-process="${pid}"]`);
+      const defectTypeInp = document.querySelector(`[data-qd-field="defectType"][data-qd-process="${pid}"]`);
       const produced = Math.max(0, Math.round(Number(producedInp.value) || 0));
       const defect = Math.max(0, Math.round(Number(defectInp.value) || 0));
+      const defectType = defectTypeInp ? defectTypeInp.value.trim() : '';
       if(defect > produced){ toast('불량수량이 생산수량보다 클 수 없습니다', 'error'); return; }
       try{
-        await fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { [`qualityOverrides.${pid}`]: { produced, defect } });
+        await fb.updateDoc(fb.doc(fb.db, 'projects', proj.id), { [`qualityOverrides.${pid}`]: { produced, defect, defectType } });
         proj.qualityOverrides = proj.qualityOverrides || {};
-        proj.qualityOverrides[pid] = { produced, defect };
+        proj.qualityOverrides[pid] = { produced, defect, defectType };
         toast('공정별 품질 상세가 수정되었습니다', 'success');
         renderContent();
       }catch(e){ toast('저장 실패: '+e.message, 'error'); }
