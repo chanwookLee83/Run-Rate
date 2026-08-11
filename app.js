@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v24'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v25'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -133,7 +133,9 @@ function subscribeProjects(){
       state.activeProjectId = null;
       document.getElementById('proj-view').style.display='none';
       document.getElementById('main-empty').style.display='flex';
-    } else if(prevActiveId){
+    } else if(prevActiveId && !state.timer.running){
+      // 타이머 작동 중에는 전체 재렌더를 피한다 (사이드바 상태 동기화 등 프로젝트 문서 쓰기로 인한
+      // 이 리스너 재발화가 "랩 기록" 버튼을 disabled 기본상태로 되돌려 랩 기록이 멈추는 문제가 있었음)
       renderProjectHeader();
       if(document.getElementById('proj-view').style.display !== 'none') renderContent();
     }
@@ -523,8 +525,10 @@ function renderSidebar(){
     return;
   }
   // 현재 열려있는 프로젝트는 서브컬렉션이 실제 로딩되어 있으므로, 그 상태를 정확히 계산해 문서에 동기화해둔다.
+  // 단, 타이머 작동 중에는 이 문서 쓰기가 프로젝트 목록 리스너를 재발화시켜 랩 기록이 끊길 수 있으므로 건너뛴다
+  // (타이머가 멈추면 그다음 renderSidebar 호출에서 자연히 동기화된다).
   const activeForSync = getProject(state.activeProjectId);
-  if(activeForSync) syncProjectStatusSummary(activeForSync);
+  if(activeForSync && !state.timer.running) syncProjectStatusSummary(activeForSync);
   list.innerHTML = DB.projects.slice().sort((a,b)=> b.createdAt.localeCompare(a.createdAt)).map(p=>{
     // 활성 프로젝트는 방금 계산한 실시간 상태를, 그 외는 저장된 요약값(없으면 로컬 계산으로 폴백)을 사용
     const status = (p.id===state.activeProjectId) ? projectStatus(p) : (p.statusSummary || projectStatus(p));
