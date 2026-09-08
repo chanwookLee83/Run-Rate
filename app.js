@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v38'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v39'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -1457,7 +1457,7 @@ function renderHistoryTab(proj){
     <div class="panel-body" style="padding:0; overflow-x:auto; -webkit-overflow-scrolling:touch;">
       ${procRows.length===0 ? `<div class="mini-empty"><p>등록된 공정이 없습니다.</p></div>` : `
       <table class="data-table">
-        <thead><tr><th>공정</th><th>생산수량(EA)</th><th>양품수량(EA)</th><th>불량수량(EA)</th><th>불량 내역</th><th>불량률(%)</th><th>수율(%)</th><th>Rate%(RunRate)</th><th>목표대비 진척률(%)</th><th></th></tr></thead>
+        <thead><tr><th>공정</th><th>생산수량(EA)</th><th>양품수량(EA)</th><th>불량수량(EA)</th><th>불량 유형</th><th>불량 수량(EA)</th><th>불량률(%)</th><th>수율(%)</th><th>Rate%(RunRate)</th><th>목표대비 진척률(%)</th><th></th></tr></thead>
         <tbody>
         ${procRows.map(r=>`<tr>
           <td>${r.seq}. ${escapeHtml(r.name)}${r.overridden?' <span class="ph-tag" style="font-size:9px; vertical-align:middle;">수동입력</span>':''}</td>
@@ -1466,7 +1466,12 @@ function renderHistoryTab(proj){
           <td class="mono">${r.defect}</td>
           <td>${r.defects.length===0 ? `<span style="color:var(--gauge-grey);">—</span>` : `
             <div class="qd-defect-tree">
-              ${r.defects.map((d,i)=>`<div class="qd-defect-item">${i===r.defects.length-1?'└':'├'} ${escapeHtml(d.type||'미분류')} <span class="mono" style="color:var(--red); font-weight:600;">${d.qty}</span></div>`).join('')}
+              ${r.defects.map((d,i)=>`<div class="qd-defect-item">${i===r.defects.length-1?'└':'├'} ${escapeHtml(d.type||'미분류')}</div>`).join('')}
+            </div>`}
+          </td>
+          <td class="mono">${r.defects.length===0 ? `<span style="color:var(--gauge-grey);">—</span>` : `
+            <div class="qd-defect-tree">
+              ${r.defects.map(d=>`<div class="qd-defect-item" style="color:var(--red); font-weight:600;">${d.qty}</div>`).join('')}
             </div>`}
           </td>
           <td>${r.defectRate??'—'}</td>
@@ -1621,18 +1626,22 @@ function exportDefectsCSV(proj){
 
   const procRows = processDefectSummaryList(proj);
   csvSection(rows, '공정별 품질 상세');
-  rows.push(['공정','생산수량(EA)','양품수량(EA)','불량수량(EA)','불량 내역','불량률(%)','수율(%)','RunRate(%)','목표대비 진척률(%)']);
-  procRows.forEach(r=> rows.push([
-    `${r.seq}. ${r.name}`,
-    r.produced,
-    r.good,
-    r.defect,
-    r.defects.map(d=>`${d.type||'미분류'} ${d.qty}`).join(' / '),
-    r.defectRate??'—',
-    r.yieldRate??'—',
-    r.ratePct??'—',
-    r.progressPct??'—'
-  ]));
+  rows.push(['공정','생산수량(EA)','양품수량(EA)','불량수량(EA)','불량 유형','불량 수량(EA)','불량률(%)','수율(%)','RunRate(%)','목표대비 진척률(%)']);
+  procRows.forEach(r=>{
+    // 불량 유형이 2종류 이상이면 유형별로 행을 나눈다. 공정 단위 값은 첫 행에만 표기.
+    const defList = (r.defects && r.defects.length) ? r.defects : [{ type:'—', qty:'—' }];
+    defList.forEach((d,i)=> rows.push(i===0 ? [
+      `${r.seq}. ${r.name}`,
+      r.produced,
+      r.good,
+      r.defect,
+      d.type||'미분류', d.qty,
+      r.defectRate??'—',
+      r.yieldRate??'—',
+      r.ratePct??'—',
+      r.progressPct??'—'
+    ] : ['', '', '', '', d.type||'미분류', d.qty, '', '', '', '']));
+  });
   rows.push([]);
 
   csvSection(rows, '불량 이력 상세');
@@ -1746,13 +1755,17 @@ function exportOnePageSummaryCSV(proj){
 
   // 7. 공정별 품질 상세
   csvSection(rows, '공정별 품질 상세');
-  rows.push(['공정','생산(EA)','양품(EA)','불량(EA)','불량 내역','불량률(%)','수율(%)','Rate(%)','진척률(%)']);
-  processDefectSummaryList(proj).forEach(r=> rows.push([
-    `${r.seq}. ${r.name}${r.overridden?' (수동입력)':''}`,
-    r.produced, r.good, r.defect,
-    r.defects.map(d=>`${d.type||'미분류'} ${d.qty}`).join(' / ')||'—',
-    D(r.defectRate), D(r.yieldRate), D(r.ratePct), D(r.progressPct)
-  ]));
+  rows.push(['공정','생산(EA)','양품(EA)','불량(EA)','불량 유형','불량 수량(EA)','불량률(%)','수율(%)','Rate(%)','진척률(%)']);
+  processDefectSummaryList(proj).forEach(r=>{
+    // 불량 유형이 2종류 이상이면 유형별로 행을 나눈다. 공정 단위 값은 첫 행에만 표기.
+    const defList = (r.defects && r.defects.length) ? r.defects : [{ type:'—', qty:'—' }];
+    defList.forEach((d,i)=> rows.push(i===0 ? [
+      `${r.seq}. ${r.name}${r.overridden?' (수동입력)':''}`,
+      r.produced, r.good, r.defect,
+      d.type||'미분류', d.qty,
+      D(r.defectRate), D(r.yieldRate), D(r.ratePct), D(r.progressPct)
+    ] : ['', '', '', '', d.type||'미분류', d.qty, '', '', '', '']));
+  });
   rows.push([]);
   rows.push(['비고', 'Rate(%) = 목표 C/T ÷ 실측 평균 C/T × 100 (4M 이상 랩 제외). CPK 판정 기준 1.33 이상 합격.']);
 
@@ -1858,17 +1871,30 @@ function buildFinalReportHTML(proj){
     </tr>`;
   }).filter(Boolean).join('');
 
-  const qRowsHtml = qRows.map(r=>`<tr>
-    <td>${r.seq}. ${esc(r.name)}${r.overridden?' <span class="tag">수동입력</span>':''}</td>
-    <td class="num">${r.produced}</td>
-    <td class="num">${r.good}</td>
-    <td class="num">${r.defect}</td>
-    <td>${r.defects.map(d=>esc((d.type||'미분류')+' '+d.qty)).join(' / ')||'—'}</td>
-    <td class="num">${dash(r.defectRate)}</td>
-    <td class="num">${dash(r.yieldRate)}</td>
-    <td class="num">${pct(r.ratePct)}</td>
-    <td class="num">${pct(r.progressPct)}</td>
-  </tr>`).join('');
+  // 불량 유형이 2종류 이상이면 유형별로 행을 나눠 보여준다. 공정 단위 값은
+  // 첫 행에 rowspan으로 한 번만 표기하고, 불량수량 열은 유형별 수량의 자동 합계.
+  const qRowsHtml = qRows.map(r=>{
+    const defList = (r.defects && r.defects.length) ? r.defects : [{ type:'—', qty:'—' }];
+    const span = defList.length;
+    const rs = span>1 ? ` rowspan="${span}"` : '';
+    const meta = (val, cls)=>`<td class="${cls||''}"${rs}>${val}</td>`;
+    return defList.map((d,i)=>{
+      const lead = i===0 ? `
+      ${meta(`${r.seq}. ${esc(r.name)}${r.overridden?' <span class="tag">수동입력</span>':''}`)}
+      ${meta(r.produced,'num')}
+      ${meta(r.good,'num')}
+      ${meta(r.defect,'num')}` : '';
+      const tail = i===0 ? `
+      ${meta(dash(r.defectRate),'num')}
+      ${meta(dash(r.yieldRate),'num')}
+      ${meta(pct(r.ratePct),'num')}
+      ${meta(pct(r.progressPct),'num')}` : '';
+      return `<tr>${lead}
+      <td>${esc(String(d.type||'미분류'))}</td>
+      <td class="num">${d.qty}</td>${tail}
+    </tr>`;
+    }).join('');
+  }).join('');
 
 
   // 종합 판정
@@ -1915,6 +1941,8 @@ function buildFinalReportHTML(proj){
   th{background:#F4F2EC;text-align:left;padding:8px 9px;font-size:10.5px;letter-spacing:.03em;text-transform:uppercase;color:#6B7280;border-bottom:2px solid #E4E1D8;white-space:nowrap;}
   td{padding:7px 9px;border-bottom:1px solid #EDEAE0;vertical-align:top;}
   td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .qd th,.qd td,.qd td.num{text-align:center;}
+  .qd td{vertical-align:middle;}
   .muted{font-size:10.5px;color:#6B7280;margin-top:1px;}
   .good{color:#2D8659;font-weight:700;} .warn{color:#9A6B1F;font-weight:700;} .bad{color:#C2410C;font-weight:700;}
   .tag{display:inline-block;font-size:9px;background:#EDEAE0;color:#6B7280;padding:1px 5px;border-radius:8px;vertical-align:middle;}
@@ -1995,10 +2023,10 @@ function buildFinalReportHTML(proj){
       </div>
     </section>
 
-    <section>
+    <section class="qd">
       <h2>공정별 품질 상세</h2>
       <div class="scroll">
-      ${table(['공정','생산','양품','불량','불량 내역','불량률%','수율%','Rate%','진척%'], qRowsHtml, '등록된 공정이 없습니다.')}
+      ${table(['공정','생산','양품','불량','불량 유형','불량 수량','불량률%','수율%','Rate%','진척%'], qRowsHtml, '등록된 공정이 없습니다.')}
       </div>
     </section>
 
