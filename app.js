@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v35'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v36'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -1793,10 +1793,6 @@ function buildFinalReportHTML(proj){
     <td class="num">${pct(r.progressPct)}</td>
   </tr>`).join('');
 
-  const defHistHtml = proj.defects.slice().sort((x,y)=>x.ts-y.ts).map((d,i)=>{
-    const pr = proj.processes.find(pp=>pp.id===d.processId);
-    return `<tr><td class="num">${i+1}</td><td>${fmtDate(d.ts)}</td><td>${esc(pr?pr.name:'')}</td><td>${esc(d.type||'')}</td><td class="num">${d.qty}</td><td class="num">${dash(d.total)}</td><td>${esc(d.remark||'')}</td></tr>`;
-  }).join('');
 
   // 종합 판정
   const verdicts = [];
@@ -1926,13 +1922,6 @@ function buildFinalReportHTML(proj){
       <h2>공정별 품질 상세</h2>
       <div class="scroll">
       ${table(['공정','생산','양품','불량','불량 내역','불량률%','수율%','Rate%','진척%'], qRowsHtml, '등록된 공정이 없습니다.')}
-      </div>
-    </section>
-
-    <section>
-      <h2>불량 이력</h2>
-      <div class="scroll">
-      ${table(['No','기록시각','공정','불량유형','수량','총생산','비고'], defHistHtml, '기록된 불량 이력이 없습니다.')}
       </div>
     </section>
 
