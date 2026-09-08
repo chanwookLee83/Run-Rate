@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v34'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v35'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -1682,6 +1682,274 @@ function exportOnePageSummaryCSV(proj){
   downloadCSV(`RunRate_${proj.pn}_한장요약_${fmtDateShort(nowISO())}.csv`, rows);
 }
 
+// ===================================================================
+// HTML 최종 리포트 (프로젝트 전체 요약)
+// ===================================================================
+function downloadHTMLReport(filename, html){
+  const blob = new Blob([html], {type:'text/html;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('HTML 리포트가 다운로드되었습니다', 'success');
+}
+
+function buildFinalReportHTML(proj){
+  const esc = escapeHtml;
+  const dash = v => (v===null||v===undefined||v==='') ? '—' : v;
+  const pct = v => (v===null||v===undefined||v==='') ? '—' : v+'%';
+
+  const ds = defectSummary(proj);
+  const overallRate = projectOverallRate(proj);
+  const bottleneck = findBottleneck(proj);
+  const a = computeAnalysisAllData(proj);
+  const totalManpower = proj.processes.reduce((s,p)=>s+(Number(p.manpower)||0),0);
+  let cpkWorst = null;
+  proj.processes.forEach(p=>{
+    const c = computeCpkSummary(proj,p.id);
+    if(c.cpk!==null && (cpkWorst===null || c.cpk<cpkWorst)) cpkWorst = c.cpk;
+  });
+  const procList = proj.processes.slice().sort((x,y)=>x.seq-y.seq);
+  const qRows = processDefectSummaryList(proj);
+
+  const rateTone = overallRate===null?'':overallRate>=100?'good':overallRate>=90?'warn':'bad';
+  const cpkTone = cpkWorst===null?'':cpkWorst>=1.33?'good':cpkWorst>=1.0?'warn':'bad';
+  const defTone = ds.defectRate===null?'':ds.defectRate<=1?'good':ds.defectRate<=3?'warn':'bad';
+
+  const kpi = (label,val,sub,tone)=>`
+    <div class="kpi ${tone||''}">
+      <div class="kl">${label}</div>
+      <div class="kv">${val}</div>
+      <div class="ks">${sub||''}</div>
+    </div>`;
+
+  const procRowsHtml = procList.map(p=>{
+    const r = computeRate(proj,p.id);
+    const c = computeCpkSummary(proj,p.id);
+    const v = measurementVerdict(r.ratePct);
+    const rc = r.ratePct===null?'':r.ratePct>=100?'good':r.ratePct>=90?'warn':'bad';
+    const cc = c.cpk===null?'':c.cpk>=1.33?'good':c.cpk>=1.0?'warn':'bad';
+    return `<tr>
+      <td>${p.seq}</td>
+      <td>${esc(p.name)}${p.eq?`<div class="muted">${esc(p.eq)}</div>`:''}</td>
+      <td class="num">${dash(p.manpower)}</td>
+      <td class="num">${dash(p.targetCt)}</td>
+      <td class="num">${dash(r.avgCt)}</td>
+      <td class="num">${dash(r.uph)}</td>
+      <td class="num ${rc}">${r.ratePct===null?'—':r.ratePct+'%'}</td>
+      <td class="num ${cc}">${c.cpk===null?'—':c.cpk.toFixed(2)}</td>
+      <td class="num">${r.n}</td>
+      <td class="${v.tone}">${esc(v.title)}</td>
+    </tr>`;
+  }).join('');
+
+  const cpkRowsHtml = procList.map(p=>{
+    const cd = proj.cpkData[p.id] || {};
+    const s = computeCpkSummary(proj,p.id);
+    if(!cd.itemName && s.cpk===null && !s.n) return '';
+    const g = cpkGrade(s.cpk);
+    return `<tr>
+      <td>${p.seq}. ${esc(p.name)}</td>
+      <td>${esc(cd.itemName||'—')}</td>
+      <td>${esc(cd.unit||'')}</td>
+      <td class="num">${dash(cd.lsl)}</td>
+      <td class="num">${dash(cd.usl)}</td>
+      <td class="num">${dash(s.m)}</td>
+      <td class="num">${dash(s.sd)}</td>
+      <td class="num">${s.n}</td>
+      <td>${esc(s.modeLabel||'')}</td>
+      <td class="num ${g.cls}">${esc(s.metricName||'CPK')} ${s.cpk===null?'—':s.cpk.toFixed(2)}</td>
+      <td class="${g.cls}">${esc(g.label)}</td>
+    </tr>`;
+  }).filter(Boolean).join('');
+
+  const m4RowsHtml = procList.map(p=>{
+    const m = compute4mSummary(proj,p.id);
+    if(!m.abnormalCount) return '';
+    return `<tr>
+      <td>${p.seq}. ${esc(p.name)}</td>
+      <td class="num">${m.abnormalCount}</td>
+      <td class="num">${pct(m.ratio)}</td>
+      <td class="num">${m.extraTimeSec}</td>
+      <td class="num">${dash(m.avgActionTimeSec)}</td>
+      <td class="num">${m.counts['설비']}</td>
+      <td class="num">${m.counts['사람']}</td>
+      <td class="num">${m.counts['방법']}</td>
+      <td class="num">${m.counts['자재']}</td>
+      <td>${m.topReason||'—'}</td>
+    </tr>`;
+  }).filter(Boolean).join('');
+
+  const qRowsHtml = qRows.map(r=>`<tr>
+    <td>${r.seq}. ${esc(r.name)}${r.overridden?' <span class="tag">수동입력</span>':''}</td>
+    <td class="num">${r.produced}</td>
+    <td class="num">${r.good}</td>
+    <td class="num">${r.defect}</td>
+    <td>${r.defects.map(d=>esc((d.type||'미분류')+' '+d.qty)).join(' / ')||'—'}</td>
+    <td class="num">${dash(r.defectRate)}</td>
+    <td class="num">${dash(r.yieldRate)}</td>
+    <td class="num">${pct(r.ratePct)}</td>
+    <td class="num">${pct(r.progressPct)}</td>
+  </tr>`).join('');
+
+  const defHistHtml = proj.defects.slice().sort((x,y)=>x.ts-y.ts).map((d,i)=>{
+    const pr = proj.processes.find(pp=>pp.id===d.processId);
+    return `<tr><td class="num">${i+1}</td><td>${fmtDate(d.ts)}</td><td>${esc(pr?pr.name:'')}</td><td>${esc(d.type||'')}</td><td class="num">${d.qty}</td><td class="num">${dash(d.total)}</td><td>${esc(d.remark||'')}</td></tr>`;
+  }).join('');
+
+  // 종합 판정
+  const verdicts = [];
+  if(overallRate!==null) verdicts.push(overallRate>=RATE_PASS_THRESHOLD
+    ? {t:'good', m:`라인 RunRate ${overallRate}% — 목표 대비 ${RATE_PASS_THRESHOLD}% 이상 충족`}
+    : {t:'bad', m:`라인 RunRate ${overallRate}% — 목표 대비 ${RATE_PASS_THRESHOLD}% 미만, 병목 공정 개선 필요`});
+  if(cpkWorst!==null) verdicts.push(cpkWorst>=1.33
+    ? {t:'good', m:`최저 CPK ${cpkWorst.toFixed(2)} — 품질 안정 (합격)`}
+    : {t: cpkWorst>=1.0?'warn':'bad', m:`최저 CPK ${cpkWorst.toFixed(2)} — ${cpkGrade(cpkWorst).label}`});
+  if(ds.defectRate!==null) verdicts.push(ds.defectRate<=1
+    ? {t:'good', m:`불량률 ${ds.defectRate}% · 수율 ${ds.yieldRate}% — 양호`}
+    : {t: ds.defectRate<=3?'warn':'bad', m:`불량률 ${ds.defectRate}% · 수율 ${ds.yieldRate}% — 개선 필요`});
+  if(bottleneck) verdicts.push({t:'warn', m:`병목 공정: ${bottleneck.name} (Avg C/T ${computeRate(proj,bottleneck.id).avgCt}초)`});
+  if(verdicts.length===0) verdicts.push({t:'warn', m:'측정 데이터가 부족합니다. 사이클타임·CPK·불량 데이터를 입력하세요.'});
+
+  const table = (headers, body, empty) => body
+    ? `<table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>`
+    : `<p class="empty">${empty}</p>`;
+
+  return `<!DOCTYPE html>
+<html lang="ko"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RUN&amp;RATE 최종 리포트 — ${esc(proj.pn)}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:'Malgun Gothic','Apple SD Gothic Neo',-apple-system,sans-serif;background:#f4f2ec;color:#1A2B42;line-height:1.5;padding:32px 16px;}
+  .sheet{max-width:1040px;margin:0 auto;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:hidden;}
+  header{background:#1A2B42;color:#fff;padding:28px 32px;}
+  header .brand{font-size:13px;letter-spacing:.15em;color:#E8A33D;font-weight:700;}
+  header h1{font-size:24px;margin:6px 0 4px;}
+  header .meta{font-size:12.5px;color:#9FB0C4;}
+  header .meta b{color:#D6E2F0;font-weight:600;}
+  .body{padding:28px 32px 40px;}
+  section{margin-bottom:34px;}
+  h2{font-size:15px;color:#1A2B42;border-left:4px solid #E8A33D;padding-left:10px;margin-bottom:14px;}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}
+  .kpi{border:1px solid #E4E1D8;border-radius:8px;padding:12px 14px;background:#FCFBF8;}
+  .kpi .kl{font-size:10.5px;font-weight:700;letter-spacing:.04em;color:#6B7280;text-transform:uppercase;}
+  .kpi .kv{font-size:22px;font-weight:700;margin:4px 0 2px;}
+  .kpi .ks{font-size:10.5px;color:#6B7280;}
+  .kpi.good{border-left:3px solid #2D8659;} .kpi.warn{border-left:3px solid #E8A33D;} .kpi.bad{border-left:3px solid #C2410C;}
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  th{background:#F4F2EC;text-align:left;padding:8px 9px;font-size:10.5px;letter-spacing:.03em;text-transform:uppercase;color:#6B7280;border-bottom:2px solid #E4E1D8;white-space:nowrap;}
+  td{padding:7px 9px;border-bottom:1px solid #EDEAE0;vertical-align:top;}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .muted{font-size:10.5px;color:#6B7280;margin-top:1px;}
+  .good{color:#2D8659;font-weight:700;} .warn{color:#9A6B1F;font-weight:700;} .bad{color:#C2410C;font-weight:700;}
+  .tag{display:inline-block;font-size:9px;background:#EDEAE0;color:#6B7280;padding:1px 5px;border-radius:8px;vertical-align:middle;}
+  .empty{font-size:12px;color:#6B7280;padding:10px 0;}
+  .verdict{border:1px solid #E4E1D8;border-radius:8px;padding:6px 14px;}
+  .verdict li{list-style:none;padding:8px 0;border-bottom:1px solid #EDEAE0;font-size:13px;}
+  .verdict li:last-child{border-bottom:none;}
+  .verdict li::before{content:'●';margin-right:8px;font-size:10px;vertical-align:middle;}
+  .verdict li.good::before{color:#2D8659;} .verdict li.warn::before{color:#E8A33D;} .verdict li.bad::before{color:#C2410C;}
+  .verdict li.good,.verdict li.warn,.verdict li.bad{color:#1A2B42;font-weight:400;}
+  .scroll{overflow-x:auto;}
+  footer{padding:16px 32px;border-top:1px solid #E4E1D8;font-size:11px;color:#6B7280;}
+  .toolbar{max-width:1040px;margin:0 auto 14px;text-align:right;}
+  .toolbar button{background:#1A2B42;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:12.5px;font-weight:600;cursor:pointer;}
+  @media print{body{background:#fff;padding:0;}.sheet{border:none;}.toolbar{display:none;}}
+</style></head>
+<body>
+<div class="toolbar"><button onclick="window.print()">인쇄 / PDF 저장</button></div>
+<div class="sheet">
+  <header>
+    <div class="brand">RUN&amp;RATE · 양산 초기 검증 리포트</div>
+    <h1>${esc(proj.pname)} <span style="font-size:15px;color:#9FB0C4;">(${esc(proj.pn)})</span></h1>
+    <div class="meta">
+      생성 <b>${fmtDate(Date.now())}</b> &nbsp;·&nbsp; 등록일 <b>${fmtDateShort(proj.createdAt)}</b> &nbsp;·&nbsp; 공정 <b>${procList.length}개</b>
+      ${proj.remark ? ` &nbsp;·&nbsp; ${esc(proj.remark)}` : ''}
+    </div>
+  </header>
+  <div class="body">
+
+    <section>
+      <h2>종합 판정</h2>
+      <ul class="verdict">
+        ${verdicts.map(v=>`<li class="${v.t}">${esc(v.m)}</li>`).join('')}
+      </ul>
+    </section>
+
+    <section>
+      <h2>핵심 지표 요약</h2>
+      <div class="kpis">
+        ${kpi('라인 Rate% (병목기준)', overallRate!==null?overallRate+'%':'—', '목표 100% 대비', rateTone)}
+        ${kpi('병목 공정', bottleneck?esc(bottleneck.name):'—', bottleneck?('Avg C/T '+computeRate(proj,bottleneck.id).avgCt+'초'):'측정 데이터 없음')}
+        ${kpi('최저 CPK', cpkWorst!==null?cpkWorst.toFixed(2):'—', cpkWorst!==null?cpkGrade(cpkWorst).label:'측정 데이터 없음', cpkTone)}
+        ${kpi('불량률', ds.defectRate!==null?ds.defectRate+'%':'—', ds.totalDefect+'건 / 생산 '+ds.totalProduced, defTone)}
+        ${kpi('수율', ds.yieldRate!==null?ds.yieldRate+'%':'—', 'PPM '+dash(ds.ppm))}
+        ${kpi('목표 수량 진척', proj.targetQty?round((ds.totalProduced/proj.targetQty)*100,1)+'%':'—', proj.targetQty?(ds.totalProduced+' / '+proj.targetQty):'목표 미설정')}
+        ${kpi('공정 투입 인원', totalManpower+'명', procList.length+'개 공정 합계')}
+        ${kpi('공정 평균 Rate', a.avgRate!==null?a.avgRate+'%':'—', '측정 완료 '+a.measured+'개 공정')}
+      </div>
+    </section>
+
+    <section>
+      <h2>공정별 현황</h2>
+      <div class="scroll">
+      ${table(['No','공정명 / 설비','인원','목표 C/T','Avg C/T','UPH','Rate%','CPK','측정','판정'], procRowsHtml, '등록된 공정이 없습니다.')}
+      </div>
+    </section>
+
+    <section>
+      <h2>병목 기준 생산 가능 수량</h2>
+      ${a.bnUph ? `<div class="kpis" style="grid-template-columns:repeat(3,1fr);">
+        ${kpi('일 생산 가능', a.dayQty!==null?a.dayQty.toLocaleString()+' EA':'—', a.capH+'h · 효율 '+a.capEff+'%')}
+        ${kpi('주 생산 가능', a.weekQty!==null?a.weekQty.toLocaleString()+' EA':'—', a.capW+'일 · 효율 '+a.capEff+'%')}
+        ${kpi('월 생산 가능', a.monQty!==null?a.monQty.toLocaleString()+' EA':'—', a.capM+'일 · 효율 '+a.capEff+'%')}
+      </div>` : `<p class="empty">병목 공정의 UPH 산출에 필요한 측정 데이터가 부족합니다.</p>`}
+    </section>
+
+    <section>
+      <h2>CPK 품질 측정 상세</h2>
+      <div class="scroll">
+      ${table(['공정','측정항목','단위','LSL','USL','평균','표준편차','표본','해석모드','지수','판정'], cpkRowsHtml, 'CPK 측정 데이터가 없습니다.')}
+      </div>
+    </section>
+
+    <section>
+      <h2>4M 이상 원인 분석</h2>
+      <div class="scroll">
+      ${table(['공정','이상건수','이상비율','손실시간(초)','평균조치(초)','설비','사람','방법','자재','주요원인'], m4RowsHtml, '태깅된 4M 이상 랩이 없습니다.')}
+      </div>
+    </section>
+
+    <section>
+      <h2>공정별 품질 상세</h2>
+      <div class="scroll">
+      ${table(['공정','생산','양품','불량','불량 내역','불량률%','수율%','Rate%','진척%'], qRowsHtml, '등록된 공정이 없습니다.')}
+      </div>
+    </section>
+
+    <section>
+      <h2>불량 이력</h2>
+      <div class="scroll">
+      ${table(['No','기록시각','공정','불량유형','수량','총생산','비고'], defHistHtml, '기록된 불량 이력이 없습니다.')}
+      </div>
+    </section>
+
+  </div>
+  <footer>
+    RUN&amp;RATE ${APP_VERSION} · 본 리포트는 리포트 생성 시점의 데이터를 기준으로 작성되었습니다.
+    Rate(%) = 목표 C/T ÷ 실측 평균 C/T × 100 (4M 이상 랩 제외). CPK 판정 기준 1.33 이상 합격.
+  </footer>
+</div>
+</body></html>`;
+}
+
+function exportFinalReportHTML(proj){
+  const html = buildFinalReportHTML(proj);
+  downloadHTMLReport(`RunRate_${proj.pn}_최종리포트_${fmtDateShort(nowISO())}.html`, html);
+}
+
 async function exportFullBackupJSON(){
   toast('백업 데이터를 모으는 중...', '');
   try{
@@ -1744,6 +2012,13 @@ document.getElementById('btn-new-project').addEventListener('click', ()=>openPro
 document.getElementById('btn-empty-new-project').addEventListener('click', ()=>openProjectModal());
 const btnEditProject = document.getElementById('btn-edit-project');
 if(btnEditProject) btnEditProject.addEventListener('click', ()=>openProjectModal(activeProject()));
+const btnExportReport = document.getElementById('btn-export-report');
+if(btnExportReport) btnExportReport.addEventListener('click', ()=>{
+  const proj = activeProject();
+  if(!proj){ toast('먼저 프로젝트를 선택하세요', 'error'); return; }
+  try{ exportFinalReportHTML(proj); }
+  catch(e){ console.error(e); toast('리포트 생성 실패: ' + e.message, 'error'); }
+});
 
 function openProjectModal(proj){
   editingProjectId = proj? proj.id : null;
