@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v37'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v38'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -2068,8 +2068,16 @@ function closeModal(id){ document.getElementById(id).style.display='none'; }
 document.querySelectorAll('[data-close]').forEach(btn=>{
   btn.addEventListener('click', ()=> closeModal(btn.dataset.close));
 });
+// 배경(오버레이) 클릭으로 닫기 — 단, "마우스를 누른 지점"도 오버레이 위여야 한다.
+// 입력창 안의 텍스트를 드래그 선택하다가 오버레이 위에서 손을 떼면 click 이벤트의
+// target이 오버레이가 되어 모달이 꺼지던 문제를 방지한다.
 document.querySelectorAll('.modal-overlay').forEach(ov=>{
-  ov.addEventListener('click', e=>{ if(e.target===ov) ov.style.display='none'; });
+  let downOnSelf = false;
+  const markDown = e=>{ downOnSelf = (e.target===ov); };
+  ov.addEventListener('pointerdown', markDown);
+  ov.addEventListener('mousedown', markDown);
+  ov.addEventListener('touchstart', markDown, {passive:true});
+  ov.addEventListener('click', e=>{ if(e.target===ov && downOnSelf) ov.style.display='none'; });
 });
 
 // ---- New project ----
