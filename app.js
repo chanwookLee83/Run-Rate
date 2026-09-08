@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v39'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v40'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -1921,7 +1921,7 @@ function buildFinalReportHTML(proj){
 <title>RUN&amp;RATE 최종 리포트 — ${esc(proj.pn)}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;}
-  body{font-family:'Malgun Gothic','Apple SD Gothic Neo',-apple-system,sans-serif;background:#f4f2ec;color:#1A2B42;line-height:1.5;padding:32px 16px;}
+  body{font-family:'Malgun Gothic','Apple SD Gothic Neo',-apple-system,sans-serif;background:#f4f2ec;color:#1A2B42;line-height:1.5;padding:32px 16px;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility;}
   .sheet{max-width:1040px;margin:0 auto;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:hidden;}
   header{background:#1A2B42;color:#fff;padding:28px 32px;}
   header .brand{font-size:13px;letter-spacing:.15em;color:#E8A33D;font-weight:700;}
@@ -1937,15 +1937,15 @@ function buildFinalReportHTML(proj){
   .kpi .kv{font-size:22px;font-weight:700;margin:4px 0 2px;}
   .kpi .ks{font-size:10.5px;color:#6B7280;}
   .kpi.good{border-left:3px solid #2D8659;} .kpi.warn{border-left:3px solid #E8A33D;} .kpi.bad{border-left:3px solid #C2410C;}
-  table{width:100%;border-collapse:collapse;font-size:12px;}
-  th{background:#F4F2EC;text-align:left;padding:8px 9px;font-size:10.5px;letter-spacing:.03em;text-transform:uppercase;color:#6B7280;border-bottom:2px solid #E4E1D8;white-space:nowrap;}
-  td{padding:7px 9px;border-bottom:1px solid #EDEAE0;vertical-align:top;}
+  table{width:100%;border-collapse:collapse;font-size:14px;}
+  th{background:#F1EEE5;text-align:left;padding:9px 9px;font-size:12.5px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;color:#44505F;border-bottom:2px solid #D8D3C6;white-space:nowrap;}
+  td{padding:8px 9px;border-bottom:1px solid #EDEAE0;vertical-align:top;}
   td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
   .qd th,.qd td,.qd td.num{text-align:center;}
   .qd td{vertical-align:middle;}
-  .muted{font-size:10.5px;color:#6B7280;margin-top:1px;}
+  .muted{font-size:12px;color:#5B6470;margin-top:1px;}
   .good{color:#2D8659;font-weight:700;} .warn{color:#9A6B1F;font-weight:700;} .bad{color:#C2410C;font-weight:700;}
-  .tag{display:inline-block;font-size:9px;background:#EDEAE0;color:#6B7280;padding:1px 5px;border-radius:8px;vertical-align:middle;}
+  .tag{display:inline-block;font-size:10.5px;background:#EDEAE0;color:#5B6470;padding:1px 6px;border-radius:8px;vertical-align:middle;}
   .empty{font-size:12px;color:#6B7280;padding:10px 0;}
   .verdict{border:1px solid #E4E1D8;border-radius:8px;padding:6px 14px;}
   .verdict li{list-style:none;padding:8px 0;border-bottom:1px solid #EDEAE0;font-size:13px;}
