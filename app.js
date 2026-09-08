@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v36'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v37'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -1646,40 +1646,117 @@ function exportDefectsCSV(proj){
   downloadCSV(`RunRate_${proj.pn}_결과이력_${fmtDateShort(nowISO())}.csv`, rows);
 }
 
+// HTML 최종 리포트와 동일한 구성/수치를 CSV로 내보낸다.
 function exportOnePageSummaryCSV(proj){
-  const rows = csvReportHeader('RUN&RATE 한장 요약 리포트', proj);
+  const D = v => (v===null||v===undefined||v==='') ? '—' : v;
+  const rows = csvReportHeader('RUN&RATE 최종 리포트', proj);
+
   const ds = defectSummary(proj);
   const overallRate = projectOverallRate(proj);
   const bottleneck = findBottleneck(proj);
+  const a = computeAnalysisAllData(proj);
+  const totalManpower = proj.processes.reduce((s,p)=>s+(Number(p.manpower)||0),0);
+  const procList = proj.processes.slice().sort((x,y)=>x.seq-y.seq);
   let cpkWorst = null;
-  proj.processes.forEach(p=>{
+  procList.forEach(p=>{
     const c = computeCpkSummary(proj, p.id);
     if(c.cpk!==null && (cpkWorst===null || c.cpk < cpkWorst)) cpkWorst = c.cpk;
   });
 
-  csvSection(rows, '요약 KPI');
-  rows.push(['전체 RunRate(%)', overallRate??'—']);
-  rows.push(['병목 공정', bottleneck?bottleneck.name:'—']);
-  rows.push(['목표 수량(EA)', proj.targetQty??'—', '누적 생산(EA)', ds.totalProduced]);
-  rows.push(['양품(EA)', ds.goodQty, '불량(EA)', ds.totalDefect]);
-  rows.push(['불량률(%)', ds.defectRate??'—', '수율(%)', ds.yieldRate??'—']);
-  rows.push(['PPM', ds.ppm??'—', '최저 CPK', cpkWorst??'—']);
+  // 1. 종합 판정
+  const verdicts = [];
+  if(overallRate!==null) verdicts.push(overallRate>=RATE_PASS_THRESHOLD
+    ? `라인 RunRate ${overallRate}% — 목표 대비 ${RATE_PASS_THRESHOLD}% 이상 충족`
+    : `라인 RunRate ${overallRate}% — 목표 대비 ${RATE_PASS_THRESHOLD}% 미만, 병목 공정 개선 필요`);
+  if(cpkWorst!==null) verdicts.push(cpkWorst>=1.33
+    ? `최저 CPK ${cpkWorst.toFixed(2)} — 품질 안정 (합격)`
+    : `최저 CPK ${cpkWorst.toFixed(2)} — ${cpkGrade(cpkWorst).label}`);
+  if(ds.defectRate!==null) verdicts.push(ds.defectRate<=1
+    ? `불량률 ${ds.defectRate}% · 수율 ${ds.yieldRate}% — 양호`
+    : `불량률 ${ds.defectRate}% · 수율 ${ds.yieldRate}% — 개선 필요`);
+  if(bottleneck) verdicts.push(`병목 공정: ${bottleneck.name} (Avg C/T ${computeRate(proj,bottleneck.id).avgCt}초)`);
+  if(verdicts.length===0) verdicts.push('측정 데이터가 부족합니다. 사이클타임·CPK·불량 데이터를 입력하세요.');
+  csvSection(rows, '종합 판정');
+  verdicts.forEach(v=> rows.push([v]));
   rows.push([]);
 
-  const procRows = processDefectSummaryList(proj).slice(0, 5);
-  csvSection(rows, '공정별 핵심 TOP5');
-  rows.push(['공정','RunRate(%)','진척률(%)','생산(EA)','불량(EA)']);
-  procRows.forEach(r=> rows.push([
-    `${r.seq}. ${r.name}`,
-    r.ratePct??'—',
-    r.progressPct??'—',
-    r.produced,
-    r.defect
+  // 2. 핵심 지표 요약
+  csvSection(rows, '핵심 지표 요약');
+  rows.push(['라인 Rate%(병목기준)', overallRate!==null?overallRate:'—', '목표 100% 대비']);
+  rows.push(['병목 공정', bottleneck?bottleneck.name:'—', bottleneck?('Avg C/T '+computeRate(proj,bottleneck.id).avgCt+'초'):'측정 데이터 없음']);
+  rows.push(['최저 CPK', cpkWorst!==null?cpkWorst.toFixed(2):'—', cpkWorst!==null?cpkGrade(cpkWorst).label:'측정 데이터 없음']);
+  rows.push(['불량률(%)', ds.defectRate!==null?ds.defectRate:'—', ds.totalDefect+'건 / 생산 '+ds.totalProduced]);
+  rows.push(['수율(%)', ds.yieldRate!==null?ds.yieldRate:'—', 'PPM '+D(ds.ppm)]);
+  rows.push(['목표 수량 진척(%)', proj.targetQty?round((ds.totalProduced/proj.targetQty)*100,1):'—', proj.targetQty?(ds.totalProduced+' / '+proj.targetQty):'목표 미설정']);
+  rows.push(['공정 투입 인원(명)', totalManpower, procList.length+'개 공정 합계']);
+  rows.push(['공정 평균 Rate(%)', a.avgRate!==null?a.avgRate:'—', '측정 완료 '+a.measured+'개 공정']);
+  rows.push([]);
+
+  // 3. 공정별 현황
+  csvSection(rows, '공정별 현황');
+  rows.push(['No','공정명','설비','인원','목표 C/T(초)','Avg C/T(초)','UPH','Rate(%)','CPK','측정건수','판정']);
+  procList.forEach(p=>{
+    const r = computeRate(proj,p.id);
+    const c = computeCpkSummary(proj,p.id);
+    rows.push([p.seq, p.name, p.eq||'', D(p.manpower), D(p.targetCt), D(r.avgCt), D(r.uph),
+      r.ratePct===null?'—':r.ratePct, c.cpk===null?'—':c.cpk.toFixed(2), r.n, measurementVerdict(r.ratePct).title]);
+  });
+  rows.push([]);
+
+  // 4. 병목 기준 생산 가능 수량
+  csvSection(rows, '병목 기준 생산 가능 수량');
+  if(a.bnUph){
+    rows.push(['구분','수량(EA)','조건']);
+    rows.push(['일 생산 가능', a.dayQty!==null?a.dayQty:'—', a.capH+'h · 효율 '+a.capEff+'%']);
+    rows.push(['주 생산 가능', a.weekQty!==null?a.weekQty:'—', a.capW+'일 · 효율 '+a.capEff+'%']);
+    rows.push(['월 생산 가능', a.monQty!==null?a.monQty:'—', a.capM+'일 · 효율 '+a.capEff+'%']);
+  } else {
+    rows.push(['병목 공정의 UPH 산출에 필요한 측정 데이터가 부족합니다.']);
+  }
+  rows.push([]);
+
+  // 5. CPK 품질 측정 상세
+  csvSection(rows, 'CPK 품질 측정 상세');
+  rows.push(['공정','측정항목','단위','LSL','USL','평균','표준편차','표본수','해석모드','지수','판정']);
+  let cpkAny = false;
+  procList.forEach(p=>{
+    const cd = proj.cpkData[p.id] || {};
+    const s = computeCpkSummary(proj,p.id);
+    if(!cd.itemName && s.cpk===null && !s.n) return;
+    cpkAny = true;
+    rows.push([`${p.seq}. ${p.name}`, cd.itemName||'—', cd.unit||'', D(cd.lsl), D(cd.usl), D(s.m), D(s.sd), s.n,
+      s.modeLabel||'', `${s.metricName||'CPK'} ${s.cpk===null?'—':s.cpk.toFixed(2)}`, cpkGrade(s.cpk).label]);
+  });
+  if(!cpkAny) rows.push(['CPK 측정 데이터가 없습니다.']);
+  rows.push([]);
+
+  // 6. 4M 이상 원인 분석
+  csvSection(rows, '4M 이상 원인 분석');
+  rows.push(['공정','이상건수','이상비율(%)','손실시간(초)','평균조치(초)','설비','사람','방법','자재','주요원인']);
+  let m4Any = false;
+  procList.forEach(p=>{
+    const m = compute4mSummary(proj,p.id);
+    if(!m.abnormalCount) return;
+    m4Any = true;
+    rows.push([`${p.seq}. ${p.name}`, m.abnormalCount, D(m.ratio), m.extraTimeSec, D(m.avgActionTimeSec),
+      m.counts['설비'], m.counts['사람'], m.counts['방법'], m.counts['자재'], m.topReason||'—']);
+  });
+  if(!m4Any) rows.push(['태깅된 4M 이상 랩이 없습니다.']);
+  rows.push([]);
+
+  // 7. 공정별 품질 상세
+  csvSection(rows, '공정별 품질 상세');
+  rows.push(['공정','생산(EA)','양품(EA)','불량(EA)','불량 내역','불량률(%)','수율(%)','Rate(%)','진척률(%)']);
+  processDefectSummaryList(proj).forEach(r=> rows.push([
+    `${r.seq}. ${r.name}${r.overridden?' (수동입력)':''}`,
+    r.produced, r.good, r.defect,
+    r.defects.map(d=>`${d.type||'미분류'} ${d.qty}`).join(' / ')||'—',
+    D(r.defectRate), D(r.yieldRate), D(r.ratePct), D(r.progressPct)
   ]));
-
   rows.push([]);
-  rows.push(['비고', '상세 원본 데이터는 각 탭의 CSV 내보내기를 사용하세요.']);
-  downloadCSV(`RunRate_${proj.pn}_한장요약_${fmtDateShort(nowISO())}.csv`, rows);
+  rows.push(['비고', 'Rate(%) = 목표 C/T ÷ 실측 평균 C/T × 100 (4M 이상 랩 제외). CPK 판정 기준 1.33 이상 합격.']);
+
+  downloadCSV(`RunRate_${proj.pn}_최종리포트_${fmtDateShort(nowISO())}.csv`, rows);
 }
 
 // ===================================================================
