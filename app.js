@@ -879,6 +879,44 @@ function computeAnalysisAllData(proj){
   return { rows, measured, totalSamples, totalManpower, avgRate, bottleneck, bnUph, capH, capW, capM, capEff, dayQty, weekQty, monQty };
 }
 
+// 수율 반영 캐파: 병목 기준 생산 가능 수량 × 라인 수율 = 양품 생산 가능 수량.
+// 라인 수율은 리포트 KPI "수율"과 같은 값(defectSummary.yieldRate)을 쓴다.
+// 공정별로는 실측 UPH × 공정 수율 = 양품 UPH 를 계산해, 수율 손실까지 고려한 실질 병목을 찾는다.
+function computeYieldCapa(proj){
+  const a = computeAnalysisAllData(proj);
+  const ds = defectSummary(proj);
+  const qMap = {}; processDefectSummaryList(proj).forEach(q=>{ qMap[q.processId] = q; });
+  const effRatio = Math.max(0, Math.min(100, a.capEff)) / 100;
+  const lineYield = ds.yieldRate;            // % 또는 null(불량 데이터 없음)
+  const y = lineYield!==null ? lineYield/100 : null;
+  const good = q => (q!==null && y!==null) ? Math.floor(q * y) : null;
+  const loss = (q,g) => (q!==null && g!==null) ? q - g : null;
+  const dayGood = good(a.dayQty), weekGood = good(a.weekQty), monGood = good(a.monQty);
+
+  const procRows = a.rows.map(r=>{
+    const q = qMap[r.id];
+    const py = (q && q.yieldRate!==null) ? q.yieldRate : null;
+    const goodUph = (r.uph!==null && py!==null) ? round(r.uph * py/100, 1) : null;
+    const dayAll = r.uph!==null ? Math.floor(r.uph * a.capH * effRatio) : null;
+    const dayG = goodUph!==null ? Math.floor(goodUph * a.capH * effRatio) : null;
+    return { id:r.id, label:r.label, uph:r.uph, yieldRate:py, goodUph, dayQty:dayAll, dayGood:dayG, dayLoss:loss(dayAll, dayG) };
+  });
+  // 양품 UPH가 가장 낮은 공정 = 수율 반영 병목
+  let yieldBottleneck = null;
+  procRows.forEach(r=>{ if(r.goodUph!==null && (yieldBottleneck===null || r.goodUph < yieldBottleneck.goodUph)) yieldBottleneck = r; });
+
+  const targetQty = ds.targetQty;
+  const remainQty = targetQty ? Math.max(targetQty - ds.goodQty, 0) : null;
+  const daysToTarget = (remainQty!==null && dayGood) ? round(remainQty / dayGood, 1) : null;
+
+  return {
+    a, lineYield, hasYield: y!==null, hasCapa: !!a.bnUph,
+    dayGood, weekGood, monGood,
+    dayLoss: loss(a.dayQty, dayGood), weekLoss: loss(a.weekQty, weekGood), monLoss: loss(a.monQty, monGood),
+    procRows, yieldBottleneck, targetQty, remainQty, daysToTarget
+  };
+}
+
 function renderAnalysisAllTab(proj){
   const { rows, measured, totalSamples, totalManpower, avgRate, bottleneck, capH, capW, capM, capEff, dayQty, weekQty, monQty } = computeAnalysisAllData(proj);
 
@@ -1724,6 +1762,29 @@ function exportOnePageSummaryCSV(proj){
   }
   rows.push([]);
 
+  // 4-1. 수율 반영 캐파 분석
+  csvSection(rows, '수율 반영 캐파 분석');
+  const yc = computeYieldCapa(proj);
+  if(!yc.hasCapa){
+    rows.push(['병목 공정의 UPH 산출에 필요한 측정 데이터가 부족합니다.']);
+  } else if(!yc.hasYield){
+    rows.push(['불량(생산수량) 데이터가 없어 수율을 산출할 수 없습니다.']);
+  } else {
+    rows.push(['적용 라인 수율(%)', yc.lineYield]);
+    rows.push(['구분','총 생산 가능(EA)','양품 생산 가능(EA)','수율 손실(EA)','조건']);
+    rows.push(['일', a.dayQty, yc.dayGood, yc.dayLoss, a.capH+'h · 효율 '+a.capEff+'%']);
+    rows.push(['주', a.weekQty, yc.weekGood, yc.weekLoss, a.capW+'일 · 효율 '+a.capEff+'%']);
+    rows.push(['월', a.monQty, yc.monGood, yc.monLoss, a.capM+'일 · 효율 '+a.capEff+'%']);
+    if(yc.targetQty) rows.push(['목표 수량(EA)', yc.targetQty, '남은 양품(EA)', yc.remainQty, '예상 소요일', D(yc.daysToTarget)]);
+    rows.push([]);
+    rows.push(['공정','UPH','공정 수율(%)','양품 UPH','일 생산(EA)','일 양품(EA)','일 수율손실(EA)','비고']);
+    yc.procRows.filter(r=>r.uph!==null || r.yieldRate!==null).forEach(r=> rows.push([
+      r.label, D(r.uph), D(r.yieldRate), D(r.goodUph), D(r.dayQty), D(r.dayGood), D(r.dayLoss),
+      (yc.yieldBottleneck && yc.yieldBottleneck.id===r.id) ? '수율반영 병목' : ''
+    ]));
+  }
+  rows.push([]);
+
   // 5. CPK 품질 측정 상세
   csvSection(rows, 'CPK 품질 측정 상세');
   rows.push(['공정','측정항목','단위','LSL','USL','평균','표준편차','표본수','해석모드','지수','판정']);
@@ -1947,6 +2008,38 @@ function buildFinalReportHTML(proj){
     ? `<table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>`
     : `<p class="empty">${empty}</p>`;
 
+  // 수율 반영 캐파 분석
+  const yc = computeYieldCapa(proj);
+  const fmtN = v => (v===null||v===undefined) ? '—' : Number(v).toLocaleString();
+  const ycRowsHtml = yc.procRows.filter(r=>r.uph!==null || r.yieldRate!==null).map(r=>{
+    const isBn = yc.yieldBottleneck && yc.yieldBottleneck.id===r.id;
+    const yc2 = r.yieldRate===null?'':r.yieldRate>=99?'good':r.yieldRate>=97?'warn':'bad';
+    return `<tr>
+      <td>${esc(r.label)}${isBn?' <span class="tag ab">수율반영 병목</span>':''}</td>
+      <td class="num">${dash(r.uph)}</td>
+      <td class="num ${yc2}">${r.yieldRate===null?'—':r.yieldRate+'%'}</td>
+      <td class="num">${dash(r.goodUph)}</td>
+      <td class="num">${fmtN(r.dayQty)}</td>
+      <td class="num">${fmtN(r.dayGood)}</td>
+      <td class="num ${r.dayLoss?'bad':''}">${fmtN(r.dayLoss)}</td>
+    </tr>`;
+  }).join('');
+  const ycSectionHtml = !yc.hasCapa
+    ? `<p class="empty">병목 공정의 UPH 산출에 필요한 측정 데이터가 부족합니다.</p>`
+    : !yc.hasYield
+    ? `<p class="empty">불량(생산수량) 데이터가 없어 수율을 산출할 수 없습니다. 결과 이력에 생산·불량 수량을 입력하면 수율 반영 캐파가 계산됩니다.</p>`
+    : `<div class="kpis">
+        ${kpi('적용 라인 수율', yc.lineYield+'%', '결과 이력 기준')}
+        ${kpi('일 양품 생산 가능', fmtN(yc.dayGood)+' EA', '총 '+fmtN(yc.a.dayQty)+' · 손실 '+fmtN(yc.dayLoss)+' EA', yc.dayLoss?'warn':'good')}
+        ${kpi('주 양품 생산 가능', fmtN(yc.weekGood)+' EA', '총 '+fmtN(yc.a.weekQty)+' · 손실 '+fmtN(yc.weekLoss)+' EA')}
+        ${kpi('월 양품 생산 가능', fmtN(yc.monGood)+' EA', '총 '+fmtN(yc.a.monQty)+' · 손실 '+fmtN(yc.monLoss)+' EA')}
+      </div>
+      ${yc.targetQty ? `<p class="muted" style="margin:10px 0 0;font-size:12.5px;">목표 ${fmtN(yc.targetQty)} EA 중 남은 양품 ${fmtN(yc.remainQty)} EA → 현재 캐파·수율 기준 약 <b>${yc.daysToTarget===null?'—':yc.daysToTarget+'일'}</b> 소요 (일 ${yc.a.capH}h · 효율 ${yc.a.capEff}%)</p>` : ''}
+      <div class="scroll" style="margin-top:14px;">
+      ${table(['공정','UPH','공정 수율','양품 UPH','일 생산(EA)','일 양품(EA)','일 수율손실(EA)'], ycRowsHtml, '공정별 데이터가 없습니다.')}
+      </div>
+      <p class="muted" style="margin-top:6px;">양품 생산 가능 = 병목 기준 생산 가능 수량 × 라인 수율. 공정별 양품 UPH = 실측 UPH × 공정 수율 (일 ${yc.a.capH}h · 효율 ${yc.a.capEff}% 기준).</p>`;
+
   // 개별 측정 기록: 공정별 사이클타임 랩 + CPK 개별 측정값
   const recordsHtml = procList.map(p=>{
     const cycles = getCycles(proj, p.id);
@@ -2095,6 +2188,11 @@ function buildFinalReportHTML(proj){
         ${kpi('주 생산 가능', a.weekQty!==null?a.weekQty.toLocaleString()+' EA':'—', a.capW+'일 · 효율 '+a.capEff+'%')}
         ${kpi('월 생산 가능', a.monQty!==null?a.monQty.toLocaleString()+' EA':'—', a.capM+'일 · 효율 '+a.capEff+'%')}
       </div>` : `<p class="empty">병목 공정의 UPH 산출에 필요한 측정 데이터가 부족합니다.</p>`}
+    </section>
+
+    <section>
+      <h2>수율 반영 캐파 분석</h2>
+      ${ycSectionHtml}
     </section>
 
     <section>
