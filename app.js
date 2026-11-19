@@ -5,7 +5,7 @@
 
 let fb = null; // firebase-init.js가 노출한 {db, collection, doc, ...} 핸들
 let DB = { projects: [] };
-const APP_VERSION = 'v40'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
+const APP_VERSION = 'v41'; // 배포 버전 표기 (sw.js 캐시 버전과 함께 올림)
 let state = {
   activeProjectId: null,
   activeTab: 'overview',
@@ -1767,6 +1767,38 @@ function exportOnePageSummaryCSV(proj){
     ] : ['', '', '', '', d.type||'미분류', d.qty, '', '', '', '']));
   });
   rows.push([]);
+
+  // 8. 개별 측정 기록
+  csvSection(rows, '개별 측정 기록');
+  let recAny = false;
+  procList.forEach(p=>{
+    const cycles = getCycles(proj, p.id);
+    const cd = proj.cpkData[p.id] || {};
+    const raw = (cd.mode==='raw' && Array.isArray(cd.raw)) ? cd.raw : [];
+    if(!cycles.length && !raw.length) return;
+    recAny = true;
+    const tgt = Number(p.targetCt) > 0 ? Number(p.targetCt) : null;
+    if(cycles.length){
+      const m4 = compute4mSummary(proj, p.id);
+      const actionTimeById = {}; m4.abnormal.forEach(c=>{ actionTimeById[c.id] = c.actionTimeSec; });
+      rows.push([`${p.seq}. ${p.name} — 사이클타임 (${cycles.length}건)`]);
+      rows.push(['No','측정시각','C/T(초)','목표대비(초)','4M 이상 사유','코멘트','조치시간(초)']);
+      cycles.forEach((c,i)=>{
+        const ab = !isNormalCycle(c);
+        const ct = Number(c.ct);
+        const diff = (tgt!==null && !isNaN(ct)) ? round(ct - tgt, 1) : '';
+        const act = actionTimeById[c.id];
+        rows.push([i+1, fmtDate(c.ts), c.ct, diff, ab?c.reasons.join('/'):'', c.note||'', ab?(act===null||act===undefined?'조치중':act):'']);
+      });
+    }
+    if(raw.length){
+      rows.push([`${p.seq}. ${p.name} — CPK 개별 측정값 (${cd.itemName||'측정항목'}${cd.unit?', '+cd.unit:''})`]);
+      rows.push(['No','측정값']);
+      raw.forEach((v,i)=> rows.push([i+1, v]));
+    }
+    rows.push([]);
+  });
+  if(!recAny){ rows.push(['개별 측정 기록이 없습니다.']); rows.push([]); }
   rows.push(['비고', 'Rate(%) = 목표 C/T ÷ 실측 평균 C/T × 100 (4M 이상 랩 제외). CPK 판정 기준 1.33 이상 합격.']);
 
   downloadCSV(`RunRate_${proj.pn}_최종리포트_${fmtDateShort(nowISO())}.csv`, rows);
@@ -1915,6 +1947,49 @@ function buildFinalReportHTML(proj){
     ? `<table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>`
     : `<p class="empty">${empty}</p>`;
 
+  // 개별 측정 기록: 공정별 사이클타임 랩 + CPK 개별 측정값
+  const recordsHtml = procList.map(p=>{
+    const cycles = getCycles(proj, p.id);
+    const cd = proj.cpkData[p.id] || {};
+    const raw = (cd.mode==='raw' && Array.isArray(cd.raw)) ? cd.raw : [];
+    if(!cycles.length && !raw.length) return '';
+    const m4 = compute4mSummary(proj, p.id);
+    const actionTimeById = {}; m4.abnormal.forEach(c=>{ actionTimeById[c.id] = c.actionTimeSec; });
+    const tgt = Number(p.targetCt) > 0 ? Number(p.targetCt) : null;
+    const r = computeRate(proj, p.id);
+    const cycRows = cycles.map((c,i)=>{
+      const ab = !isNormalCycle(c);
+      const ct = Number(c.ct);
+      const diff = (tgt!==null && !isNaN(ct)) ? round(ct - tgt, 1) : null;
+      const dc = diff===null ? '' : diff>0 ? 'bad' : 'good';
+      const act = actionTimeById[c.id];
+      return `<tr class="${ab?'ab':''}">
+        <td class="num">${i+1}</td>
+        <td>${esc(fmtDate(c.ts))}</td>
+        <td class="num">${dash(c.ct)}</td>
+        <td class="num ${dc}">${diff===null?'—':(diff>0?'+':'')+diff}</td>
+        <td>${ab?`<span class="tag ab">${esc(c.reasons.join('/'))}</span>`:''}</td>
+        <td>${esc(c.note||'')}</td>
+        <td class="num">${ab?(act===null||act===undefined?'조치중':act):''}</td>
+      </tr>`;
+    }).join('');
+    const cycHtml = cycles.length ? `
+      <div class="rec-sub">사이클타임 측정 ${cycles.length}건 · 정상 ${r.n}건 · 목표 C/T ${dash(p.targetCt)}초 · Avg C/T ${dash(r.avgCt)}초</div>
+      <div class="scroll">${table(['No','측정시각','C/T(초)','목표대비(초)','4M 이상 사유','코멘트','조치시간(초)'], cycRows, '')}</div>` : '';
+    const rawHtml = raw.length ? `
+      <div class="rec-sub">CPK 개별 측정값 — ${esc(cd.itemName||'측정항목')}${cd.unit?` (${esc(cd.unit)})`:''} · ${raw.length}개${(cd.lsl!==undefined&&cd.lsl!==null&&cd.lsl!=='')||(cd.usl!==undefined&&cd.usl!==null&&cd.usl!=='')?` · 규격 ${dash(cd.lsl)} ~ ${dash(cd.usl)}`:''}</div>
+      <div class="raw-grid">${raw.map((v,i)=>{
+        const n = Number(v);
+        const out = (cd.usl!==undefined&&cd.usl!==null&&cd.usl!==''&&n>Number(cd.usl)) || (cd.lsl!==undefined&&cd.lsl!==null&&cd.lsl!==''&&n<Number(cd.lsl));
+        return `<div class="raw${out?' out':''}"><span>${i+1}</span>${esc(String(v))}</div>`;
+      }).join('')}</div>` : '';
+    return `<div class="rec">
+      <h3>${p.seq}. ${esc(p.name)}${p.eq?` <span class="muted" style="display:inline;">· ${esc(p.eq)}</span>`:''}</h3>
+      ${cycHtml}${rawHtml}
+    </div>`;
+  }).filter(Boolean).join('');
+
+
   return `<!DOCTYPE html>
 <html lang="ko"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1954,10 +2029,23 @@ function buildFinalReportHTML(proj){
   .verdict li.good::before{color:#2D8659;} .verdict li.warn::before{color:#E8A33D;} .verdict li.bad::before{color:#C2410C;}
   .verdict li.good,.verdict li.warn,.verdict li.bad{color:#1A2B42;font-weight:400;}
   .scroll{overflow-x:auto;}
+  .rec{margin-bottom:22px;}
+  .rec h3{font-size:14px;margin-bottom:4px;}
+  .rec-sub{font-size:12px;color:#5B6470;margin:8px 0 6px;}
+  .rec table{font-size:13px;}
+  .rec td{padding:6px 9px;}
+  tr.ab td{background:#FDF3E7;}
+  .tag.ab{background:#F6DDBB;color:#8A4B0F;}
+  .raw-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:6px;}
+  .raw{border:1px solid #EDEAE0;border-radius:6px;padding:5px 8px;font-size:13px;text-align:right;font-variant-numeric:tabular-nums;}
+  .raw span{float:left;font-size:10.5px;color:#9AA1AA;margin-top:2px;}
+  .raw.out{border-color:#C2410C;color:#C2410C;font-weight:700;}
   footer{padding:16px 32px;border-top:1px solid #E4E1D8;font-size:11px;color:#6B7280;}
   .toolbar{max-width:1040px;margin:0 auto 14px;text-align:right;}
   .toolbar button{background:#1A2B42;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:12.5px;font-weight:600;cursor:pointer;}
-  @media print{body{background:#fff;padding:0;}.sheet{border:none;}.toolbar{display:none;}}
+  @media print{body{background:#fff;padding:0;}.sheet{border:none;}.toolbar{display:none;}
+    section.records{break-before:page;} .rec h3{break-after:avoid;} tr{break-inside:avoid;}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}
 </style></head>
 <body>
 <div class="toolbar"><button onclick="window.print()">인쇄 / PDF 저장</button></div>
@@ -2028,6 +2116,11 @@ function buildFinalReportHTML(proj){
       <div class="scroll">
       ${table(['공정','생산','양품','불량','불량 유형','불량 수량','불량률%','수율%','Rate%','진척%'], qRowsHtml, '등록된 공정이 없습니다.')}
       </div>
+    </section>
+
+    <section class="records">
+      <h2>개별 측정 기록</h2>
+      ${recordsHtml || '<p class="empty">개별 측정 기록이 없습니다.</p>'}
     </section>
 
   </div>
